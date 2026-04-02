@@ -1,13 +1,13 @@
 # Surface CLI
 
-A clean, local-first mail CLI for humans and agents.
+A clean, local-first mail CLI for multi-provider, multi-account email.
 
 The core idea is simple:
 
 - normalize Gmail and Outlook into one mail contract
 - keep provider transport hidden behind adapters
 - return cheap message summaries by default
-- fetch full bodies only when asked
+- cache normalized full bodies when useful
 - make write actions draft-first unless explicitly sent
 
 ## Design Principles
@@ -21,7 +21,7 @@ The core idea is simple:
 - Treat large content as artifacts, not stdout.
   The CLI should print concise JSON manifests and store heavy bodies/attachments on disk.
 - Draft first for writes.
-  Agents should usually create drafts, then a policy or human decides whether to send.
+  By default, writes should create drafts unless send is explicit.
 - Expose capabilities explicitly.
   Not every account will support every action equally well, especially browser-driven Outlook flows.
 
@@ -33,7 +33,6 @@ Top-level groups:
 - `surface auth`
 - `surface mail`
 - `surface attachment`
-- `surface agent`
 
 Example command set:
 
@@ -44,8 +43,8 @@ surface account add school --provider outlook --transport outlook-web-playwright
 surface auth login work
 surface auth login school
 
-surface mail unread --account work --limit 25 --summarize --json
-surface mail search --account all --from billing@vendor.com --has-attachment --view summary --json
+surface mail unread --account work --limit 25 --emit summary --hydrate text --json
+surface mail search --account all --from billing@vendor.com --has-attachment --emit summary --hydrate text --json
 surface mail read msg_01HV... --body text --json
 
 surface attachment list msg_01HV...
@@ -55,9 +54,6 @@ surface mail reply msg_01HV... --body-file ./reply.md --mode draft
 surface mail send-draft drf_01HV...
 surface mail archive msg_01HV...
 surface mail mark-read msg_01HV...
-
-surface agent triage --account work --limit 50 --policy ./policy.md --out ./triage.json
-surface agent apply ./actions.json --dry-run
 ```
 
 ## Suggested Behavior
@@ -71,27 +67,45 @@ Default output:
 - attachment count
 - thread id
 - unread state
-- optional summary block
+- summary block
+- body reference if hydration is enabled
 
-Not full body by default.
+Default contract:
+
+- emit summaries inline
+- hydrate normalized text bodies into the run cache
+- do not inline full bodies in stdout
+- obey per-message and per-run byte budgets while hydrating
+
+This keeps the result token-efficient while avoiding a second provider fetch later.
 
 ### `surface mail search`
 
-Default output should also be envelope-first.
+Default output should also be envelope-first, but the key split is:
 
-Good pattern:
+- `--emit refs`
+- `--emit summary`
+- `--emit full`
 
-- `--view envelope`
-- `--view summary`
-- `--view full`
+and independently:
 
-Where:
+- `--hydrate none`
+- `--hydrate text`
+- `--hydrate full`
 
-- `envelope` is cheap metadata plus snippet
-- `summary` adds LLM summary artifacts
-- `full` hydrates bodies and stores them on disk
+Recommended default:
 
-This is cleaner than making search always return full contents.
+- `--emit summary`
+- `--hydrate text`
+
+That means:
+
+- the command returns envelope metadata plus summaries in stdout
+- the command also stores normalized text bodies on disk
+- later reads can load from cache instead of hitting the provider again
+- hydration should stop or truncate when byte budgets are exceeded
+
+This is cleaner than making search always return full contents inline.
 
 ### `surface mail read`
 
@@ -105,13 +119,16 @@ It should return or materialize:
 - quoted history if requested
 - attachment metadata
 
+It should prefer cached bodies from a prior `search` or `unread` run when available.
+If the cached body was truncated due to a budget, `read` can re-fetch the full message on demand.
+
 ## Public Contracts
 
 TypeScript is a good fit here because:
 
 - Playwright support is strong
 - Gmail API support is mature
-- you can define stable typed contracts for agents and adapters
+- you can define stable typed contracts for consumers and adapters
 
 ### Account
 
@@ -162,7 +179,7 @@ interface CapabilitySet {
 }
 ```
 
-This matters because `outlook-web-playwright` may support the same user-visible action set, but the reliability characteristics are different. The agent layer should inspect capability flags, not assume parity.
+This matters because `outlook-web-playwright` may support the same user-visible action set, but the reliability characteristics are different. Consumers should inspect capability flags, not assume parity.
 
 ### Message Envelope
 
@@ -239,7 +256,7 @@ interface MessageSummary {
 }
 ```
 
-The summary should be small and stable. It exists to help a stronger model decide what to open next.
+The summary should be small and stable. It exists to support broad, token-efficient triage.
 
 ### Full Message
 
@@ -263,6 +280,22 @@ interface AttachmentMeta {
 }
 ```
 
+### Hydration Metadata
+
+```ts
+interface BodyRef {
+  messageId: string;
+  status: "not_fetched" | "cached";
+  format: "text" | "full";
+  textPath?: string;
+  htmlPath?: string;
+  sizeBytes?: number;
+  truncated?: boolean;
+}
+```
+
+Use `BodyRef` on list/search results so the caller knows whether a later `read` will come from local cache or require a provider fetch.
+
 ### Search Query
 
 Do not make provider-native query syntax the primary API.
@@ -285,6 +318,18 @@ interface MailQuery {
   limit?: number;
   cursor?: string;
   providerQuery?: string;
+}
+```
+
+### List/Search Result
+
+`search` and `unread` should return a normalized result item rather than just an envelope:
+
+```ts
+interface MessageListItem {
+  envelope: MessageEnvelope;
+  summary?: MessageSummary;
+  bodyRef?: BodyRef;
 }
 ```
 
@@ -372,7 +417,7 @@ interface ActionResult {
 
 ## Output Model
 
-For agent use, the CLI should prefer `--json` and write artifacts to disk.
+The CLI should prefer `--json` and write heavy artifacts to disk.
 
 Suggested run layout:
 
@@ -383,7 +428,7 @@ Suggested run layout:
   runs/
     2026-04-02T14-00-00Z/
       manifest.json
-      summaries.ndjson
+      messages.ndjson
       bodies/
       attachments/
 ```
@@ -394,39 +439,35 @@ Good command output pattern:
 {
   "runId": "2026-04-02T14-00-00Z",
   "accountIds": ["work"],
-  "view": "summary",
+  "emit": "summary",
+  "hydrate": "text",
   "messages": [
     {
-      "id": "msg_01HV",
-      "threadId": "thr_01HV",
-      "subject": "Invoice overdue",
-      "from": { "email": "billing@vendor.com" },
-      "receivedAt": "2026-04-02T09:12:00Z",
-      "summaryPath": ".surface/runs/2026-04-02T14-00-00Z/summaries.ndjson"
+      "envelope": {
+        "id": "msg_01HV",
+        "threadId": "thr_01HV",
+        "subject": "Invoice overdue",
+        "from": { "email": "billing@vendor.com" },
+        "receivedAt": "2026-04-02T09:12:00Z"
+      },
+      "summary": {
+        "brief": "Vendor invoice is overdue and needs payment review.",
+        "urgency": "high",
+        "needsAction": true,
+        "actionType": "pay"
+      },
+      "bodyRef": {
+        "messageId": "msg_01HV",
+        "status": "cached",
+        "format": "text",
+        "textPath": ".surface/runs/2026-04-02T14-00-00Z/bodies/msg_01HV.txt"
+      }
     }
   ]
 }
 ```
 
-The important part is that the CLI does not dump giant email bodies into stdout unless explicitly requested.
-
-## Agent Layer
-
-Treat the agent layer as a thin orchestration layer over the core mail commands, not as the provider integration itself.
-
-Good agent commands:
-
-- `surface agent triage`
-- `surface agent plan`
-- `surface agent apply`
-
-Suggested flow:
-
-1. `triage` fetches unread or search results and creates summaries.
-2. `plan` proposes actions against those summaries.
-3. `apply` executes approved actions, usually with `dryRun` first.
-
-This gives you a clean safety boundary and makes testing much easier.
+The important part is that the CLI does not dump giant email bodies into stdout unless explicitly requested, but it can still cache those bodies locally during the initial fetch.
 
 ## Recommended V1 Scope
 
@@ -460,7 +501,10 @@ Add later:
 ## Opinionated Choices
 
 - `search` should not return full contents by default.
-- `read` should be the only command that hydrates a full body unless `--view full` is explicit.
+- `search` and `unread` should default to `--emit summary --hydrate text`.
+- `read` should load from cache first and only hit the provider if the body was not already hydrated.
+- full bodies should usually be stored on disk, not inlined into stdout JSON
+- hydration should respect byte budgets so very large searches do not become accidental bulk exports
 - summaries should be separate artifacts, not mixed into raw message bodies
 - draft creation should be a first-class action
 - provider-specific quirks should stay inside adapters
@@ -471,7 +515,7 @@ Add later:
 If the tool feels good, it will have three layers:
 
 1. Provider adapters: Gmail API, Outlook Playwright, later Graph.
-2. Core normalized mail service: accounts, messages, search, read, actions.
-3. Agent workflow layer: triage, summarize, plan, apply.
+2. Core normalized mail service: accounts, messages, search, read, actions, cache.
+3. External orchestration: OpenClaw or any other caller that shells out to the CLI.
 
 That is the shape to aim for.
