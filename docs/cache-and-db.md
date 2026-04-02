@@ -74,3 +74,6 @@ Auth data should not be deleted by cache commands.
 - truncation settings and defaults
 - attachment retention policy
 - how to represent stale vs fresh mailbox state
+
+See also `docs/m1-checklist.md` and `docs/config.md` for the remaining M1 decisions that
+must be frozen before implementation begins.

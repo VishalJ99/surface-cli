@@ -95,3 +95,5 @@ Each message should contain:
 - exact flag names for truncation and refresh behavior
 - whether `search` should expose pagination/cursors in v1
 - exact shape of write/action commands
+
+See also `docs/m1-checklist.md` for the specific decisions required to clear Milestone 1.

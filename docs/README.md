@@ -10,6 +10,10 @@ This directory is the source of truth for Surface CLI behavior.
   Provider adapter contract and implementation rules.
 - `cache-and-db.md`
   Local SQLite, cache layout, and refresh behavior.
+- `config.md`
+  Global configuration keys, defaults, and precedence.
+- `m1-checklist.md`
+  Exact decisions required to clear Milestone 1.
 - `decisions/`
   Architecture Decision Records (ADRs).
 
