@@ -38,3 +38,4 @@ Use zero-padded sequential numbers:
 - `0014-outlook-write-actions-use-ui-fallbacks.md`
 - `0015-draft-is-a-flagged-send-disposition.md`
 - `0016-outlook-drafts-use-autosave-and-best-effort-resolution.md`
+- `0017-outlook-attachment-download-uses-owa-authenticated-rest.md`

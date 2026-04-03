@@ -66,6 +66,8 @@ Use the directories this way:
   disposable local cache such as normalized message bodies
 - `downloads/`
   explicit user-requested attachment downloads
+  Surface should persist the last saved path in SQLite and preserve it across message refreshes
+  when the stable `attachment_id` is unchanged
 
 `downloads/` should not be treated as disposable cache.
 

@@ -621,6 +621,9 @@ export class SurfaceDatabase {
       saved_to: string | null;
     }>,
   ): void {
+    const existingSavedTo = new Map(
+      this.listAttachmentsForMessage(messageRef).map((attachment) => [attachment.attachment_id, attachment.saved_to]),
+    );
     this.connection.prepare("DELETE FROM attachments WHERE message_ref = ?").run(messageRef);
     const insert = this.connection.prepare(
       `
@@ -649,8 +652,21 @@ export class SurfaceDatabase {
         ...attachment,
         message_ref: messageRef,
         inline: attachment.inline ? 1 : 0,
+        saved_to: attachment.saved_to ?? existingSavedTo.get(attachment.attachment_id) ?? null,
       });
     }
+  }
+
+  updateAttachmentSavedTo(attachmentId: string, savedTo: string | null): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE attachments
+        SET saved_to = ?
+        WHERE attachment_id = ?
+        `,
+      )
+      .run(savedTo, attachmentId);
   }
 
   upsertSummary(threadRef: string, summary: ThreadSummary): void {

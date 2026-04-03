@@ -138,6 +138,7 @@ At minimum:
 
 - provider thread identifier
 - provider message identifier
+- provider attachment identifier when attachment download is supported
 - account identifier
 - mailbox or folder hint when useful
 - any transport-specific locator required for subsequent read/download/action calls

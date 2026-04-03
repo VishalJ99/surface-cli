@@ -26,7 +26,7 @@ import type {
   SearchQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
-import { SurfaceError, notImplemented } from "../../lib/errors.js";
+import { SurfaceError } from "../../lib/errors.js";
 import { assertWriteAllowed, collectWriteRecipients } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeThread } from "../../summarizer.js";
@@ -345,6 +345,13 @@ interface OutlookMessageLocator {
   meeting_end: string | null;
 }
 
+interface OutlookAttachmentLocator {
+  attachment_id: string | null;
+  filename: string | null;
+  index: number | null;
+  message_key: string | null;
+}
+
 function parseOutlookMessageLocator(locatorJson: string): OutlookMessageLocator {
   const locator = JSON.parse(locatorJson) as Record<string, unknown>;
   const stringOrNull = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
@@ -360,6 +367,24 @@ function parseOutlookMessageLocator(locatorJson: string): OutlookMessageLocator 
     meeting_start: stringOrNull(locator.meeting_start),
     meeting_end: stringOrNull(locator.meeting_end),
   };
+}
+
+function parseOutlookAttachmentLocator(locatorJson: string): OutlookAttachmentLocator {
+  const locator = JSON.parse(locatorJson) as Record<string, unknown>;
+  return {
+    attachment_id: typeof locator.attachment_id === "string" && locator.attachment_id ? locator.attachment_id : null,
+    filename: typeof locator.filename === "string" && locator.filename ? locator.filename : null,
+    index: typeof locator.index === "number" ? locator.index : null,
+    message_key: typeof locator.message_key === "string" && locator.message_key ? locator.message_key : null,
+  };
+}
+
+function sanitizeAttachmentFilename(filename: string): string {
+  const sanitized = filename
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized || "attachment";
 }
 
 function participantFromEmail(email: string): MessageParticipant {
@@ -762,6 +787,129 @@ async function resolveMessageActionTarget(
   return { locator, stored };
 }
 
+async function resolveAttachmentDownloadTarget(
+  account: MailAccount,
+  messageRef: string,
+  attachmentId: string,
+  context: ProviderContext,
+): Promise<{
+  stored: StoredMessageRecord;
+  messageLocator: OutlookMessageLocator;
+  attachment: {
+    attachment_id: string;
+    filename: string;
+    mime_type: string;
+    size_bytes: number | null;
+    inline: boolean;
+    saved_to: string | null;
+  };
+  attachmentLocator: OutlookAttachmentLocator;
+}> {
+  const message = context.db.findMessageByRef(messageRef);
+  if (!message) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  const storedAttachment = context.db.findAttachmentById(attachmentId);
+  if (!storedAttachment || storedAttachment.message_ref !== messageRef) {
+    throw new SurfaceError("not_found", `Attachment '${attachmentId}' was not found on message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+      threadRef: message.thread_ref,
+    });
+  }
+
+  let stored = context.db.getStoredMessage(messageRef);
+  if (!stored) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+      account: account.name,
+      messageRef,
+      threadRef: message.thread_ref,
+    });
+  }
+
+  let messageLocatorRow = context.db.findProviderLocator("message", messageRef);
+  let attachmentLocatorRow = context.db.findProviderLocator("attachment", attachmentId);
+  if (!messageLocatorRow || !attachmentLocatorRow) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    messageLocatorRow = context.db.findProviderLocator("message", messageRef);
+    attachmentLocatorRow = context.db.findProviderLocator("attachment", attachmentId);
+  }
+
+  if (!messageLocatorRow || !attachmentLocatorRow) {
+    throw new SurfaceError(
+      "cache_miss",
+      `Attachment '${attachmentId}' is missing provider locator data required for download.`,
+      {
+        account: account.name,
+        messageRef,
+        threadRef: stored.thread_ref,
+      },
+    );
+  }
+
+  let messageLocator = parseOutlookMessageLocator(messageLocatorRow.locator_json);
+  let attachmentLocator = parseOutlookAttachmentLocator(attachmentLocatorRow.locator_json);
+  if (!messageLocator.message_id || !attachmentLocator.attachment_id) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    messageLocatorRow = context.db.findProviderLocator("message", messageRef);
+    attachmentLocatorRow = context.db.findProviderLocator("attachment", attachmentId);
+    if (!messageLocatorRow || !attachmentLocatorRow) {
+      throw new SurfaceError(
+        "cache_miss",
+        `Attachment '${attachmentId}' is missing provider locator data required for download.`,
+        {
+          account: account.name,
+          messageRef,
+          threadRef: stored.thread_ref,
+        },
+      );
+    }
+    messageLocator = parseOutlookMessageLocator(messageLocatorRow.locator_json);
+    attachmentLocator = parseOutlookAttachmentLocator(attachmentLocatorRow.locator_json);
+  }
+
+  if (!messageLocator.message_id || !attachmentLocator.attachment_id) {
+    throw new SurfaceError(
+      "unsupported",
+      `Attachment '${attachmentId}' does not expose enough Outlook metadata for download.`,
+      {
+        account: account.name,
+        messageRef,
+        threadRef: stored.thread_ref,
+      },
+    );
+  }
+
+  const attachment = context.db
+    .listAttachmentsForMessage(messageRef)
+    .find((candidate) => candidate.attachment_id === attachmentId);
+  if (!attachment) {
+    throw new SurfaceError("not_found", `Attachment '${attachmentId}' was not found on message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+      threadRef: stored.thread_ref,
+    });
+  }
+
+  return {
+    stored,
+    messageLocator,
+    attachment: {
+      attachment_id: attachment.attachment_id,
+      filename: attachment.filename,
+      mime_type: attachment.mime_type,
+      size_bytes: attachment.size_bytes,
+      inline: Boolean(attachment.inline),
+      saved_to: attachment.saved_to,
+    },
+    attachmentLocator,
+  };
+}
+
 async function openConversationForAction(
   page: Page,
   locator: OutlookMessageLocator,
@@ -959,6 +1107,21 @@ function buildCreateItemHeaders(headers: Record<string, string>): Record<string,
     action: "CreateItem",
     "content-type": "application/json; charset=utf-8",
   };
+}
+
+function buildOutlookRestHeaders(headers: Record<string, string>): Record<string, string> {
+  const restHeaders: Record<string, string> = {};
+  if (headers.authorization) {
+    restHeaders.authorization = headers.authorization;
+  }
+  if (headers.prefer) {
+    restHeaders.prefer = headers.prefer;
+  }
+  return restHeaders;
+}
+
+function buildOutlookRestAttachmentValueUrl(messageId: string, attachmentId: string): string {
+  return `https://outlook.office.com/api/v2.0/me/messages('${encodeURIComponent(messageId)}')/attachments('${encodeURIComponent(attachmentId)}')/$value`;
 }
 
 function buildMeetingResponseType(response: RsvpResponse): "AcceptItem" | "DeclineItem" | "TentativelyAcceptItem" {
@@ -1587,7 +1750,69 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     return buildArchiveEnvelope(account, messageRef, target.stored.thread_ref);
   }
 
-  async downloadAttachment(account: MailAccount): Promise<AttachmentDownloadEnvelope> {
-    notImplemented("Outlook attachment download is not wired yet.", account.name);
+  async downloadAttachment(
+    account: MailAccount,
+    messageRef: string,
+    attachmentId: string,
+    context: ProviderContext,
+  ): Promise<AttachmentDownloadEnvelope> {
+    const target = await resolveAttachmentDownloadTarget(account, messageRef, attachmentId, context);
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+
+    let savedTo: string | null = null;
+    try {
+      const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
+        timeoutMs: context.config.providerTimeoutMs,
+      });
+      const response = await session.context.request.get(
+        buildOutlookRestAttachmentValueUrl(
+          target.messageLocator.message_id!,
+          target.attachmentLocator.attachment_id!,
+        ),
+        {
+          headers: buildOutlookRestHeaders(capturedSession.headers),
+          failOnStatusCode: false,
+          timeout: context.config.providerTimeoutMs,
+        },
+      );
+
+      if (!response.ok()) {
+        throw new SurfaceError(
+          "transport_error",
+          `Outlook attachment download failed with status ${response.status()}.`,
+          {
+            account: account.name,
+            messageRef,
+            threadRef: target.stored.thread_ref,
+          },
+        );
+      }
+
+      const downloadDir = join(context.accountPaths.downloadsDir, messageRef);
+      mkdirSync(downloadDir, { recursive: true });
+      const filename = sanitizeAttachmentFilename(target.attachment.filename);
+      savedTo = join(downloadDir, `${attachmentId}__${filename}`);
+      writeFileSync(savedTo, await response.body());
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    context.db.updateAttachmentSavedTo(attachmentId, savedTo);
+    return {
+      schema_version: "1",
+      command: "attachment-download",
+      account: account.name,
+      message_ref: messageRef,
+      attachment: {
+        attachment_id: attachmentId,
+        filename: target.attachment.filename,
+        mime_type: target.attachment.mime_type,
+        size_bytes: target.attachment.size_bytes,
+        inline: target.attachment.inline,
+        saved_to: savedTo,
+      },
+    };
   }
 }
