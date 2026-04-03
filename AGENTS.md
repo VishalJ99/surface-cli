@@ -31,6 +31,14 @@ Do not invent behavior that conflicts with these docs.
   SQLite schema, cache paths, truncation, and refresh rules.
 - `docs/decisions/`
   ADRs for architecture and public contract decisions.
+- `src/cli.ts`
+  Root TypeScript CLI entrypoint.
+- `src/contracts/`
+  Canonical code-level contracts and normalized mail types.
+- `src/state/`
+  SQLite schema and local state helpers.
+- `src/providers/`
+  Provider adapters plus donor normalization logic carried forward from the legacy repo.
 
 ## Command Model
 

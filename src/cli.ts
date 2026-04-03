@@ -1,0 +1,450 @@
+#!/usr/bin/env node
+
+import { Command, Option } from "commander";
+import { statSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+import { accountInputSchema } from "./contracts/account.js";
+import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
+import { writeJson } from "./lib/json.js";
+import { nowIsoUtc } from "./lib/time.js";
+import { resolveProviderAdapter } from "./providers/index.js";
+import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
+
+interface GlobalOptions {
+  config?: string;
+}
+
+function positiveInt(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("Expected a positive integer.");
+  }
+  return parsed;
+}
+
+function directorySizeBytes(rootPath: string): number {
+  if (!existsSync(rootPath)) {
+    return 0;
+  }
+
+  const stats = statSync(rootPath);
+  if (stats.isFile()) {
+    return stats.size;
+  }
+
+  let total = 0;
+  for (const entry of readdirSync(rootPath, { withFileTypes: true })) {
+    total += directorySizeBytes(join(rootPath, entry.name));
+  }
+  return total;
+}
+
+async function runAction(
+  options: GlobalOptions,
+  action: (context: ReturnType<typeof createRuntimeContext>) => Promise<void> | void,
+): Promise<void> {
+  const context = createRuntimeContext(
+    options.config ? { configPath: options.config } : {},
+  );
+  try {
+    await action(context);
+  } finally {
+    context.db.close();
+  }
+}
+
+async function runAccountAction(
+  options: GlobalOptions,
+  accountName: string,
+  action: (context: ReturnType<typeof createAccountRuntimeContext>) => Promise<void> | void,
+): Promise<void> {
+  await runAction(options, async (context) => {
+    const account = context.db.findAccountByName(accountName);
+    if (!account) {
+      throw new SurfaceError("not_found", `Account '${accountName}' was not found.`, {
+        account: accountName,
+      });
+    }
+    await action(createAccountRuntimeContext(context, account));
+  });
+}
+
+async function runMessageAction(
+  options: GlobalOptions,
+  messageRef: string,
+  action: (
+    context: ReturnType<typeof createAccountRuntimeContext>,
+    resolved: { message_ref: string; thread_ref: string; account_id: string },
+  ) => Promise<void> | void,
+): Promise<void> {
+  await runAction(options, async (context) => {
+    const resolved = context.db.findMessageByRef(messageRef);
+    if (!resolved) {
+      throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+        messageRef,
+      });
+    }
+
+    const account = context.db.findAccountById(resolved.account_id);
+    if (!account) {
+      throw new SurfaceError("not_found", `Account for message '${messageRef}' was not found.`, {
+        messageRef,
+      });
+    }
+
+    await action(createAccountRuntimeContext(context, account), resolved);
+  });
+}
+
+const program = new Command();
+program
+  .name("surface")
+  .description("Multi-provider mail CLI for Surface.")
+  .showHelpAfterError()
+  .addOption(new Option("--config <path>", "Config file path").env("SURFACE_CONFIG_PATH"));
+
+const accountCommand = program.command("account").description("Manage Surface accounts.");
+
+accountCommand
+  .command("add")
+  .argument("<name>", "Logical account name, for example work or personal")
+  .requiredOption("--provider <provider>", "Provider family, for example gmail or outlook")
+  .requiredOption("--transport <transport>", "Transport name, for example gmail-api")
+  .requiredOption("--email <email>", "Primary mailbox email address")
+  .action(async (name: string, options, command: Command) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+      const parsed = accountInputSchema.parse({
+        name,
+        provider: options.provider,
+        transport: options.transport,
+        email: options.email,
+      });
+      const account = context.db.upsertAccount(parsed);
+      writeJson({
+        schema_version: "1",
+        command: "account-add",
+        account,
+      });
+    });
+  });
+
+accountCommand.command("list").action(async (_options, command: Command) => {
+  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+    writeJson({
+      schema_version: "1",
+      command: "account-list",
+      accounts: context.db.listAccounts(),
+    });
+  });
+});
+
+accountCommand
+  .command("remove")
+  .argument("<name>", "Logical account name")
+  .action(async (name: string, _options, command: Command) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+      const removed = context.db.removeAccountByName(name);
+      if (!removed) {
+        throw new SurfaceError("not_found", `Account '${name}' was not found.`, {
+          account: name,
+        });
+      }
+
+      writeJson({
+        schema_version: "1",
+        command: "account-remove",
+        removed_account: removed.name,
+      });
+    });
+  });
+
+const authCommand = program.command("auth").description("Manage provider authentication state.");
+
+authCommand
+  .command("login")
+  .argument("<account>", "Logical account name")
+  .action(async (accountName: string, _options, command: Command) => {
+    await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
+      const adapter = resolveProviderAdapter(context.account);
+      const status = await adapter.login(context.account, context);
+      writeJson({
+        schema_version: "1",
+        command: "auth-login",
+        account: context.account.name,
+        provider: context.account.provider,
+        transport: context.account.transport,
+        status,
+      });
+    });
+  });
+
+authCommand
+  .command("status")
+  .argument("[account]", "Logical account name")
+  .action(async (accountName: string | undefined, _options, command: Command) => {
+    const globalOptions = command.optsWithGlobals<GlobalOptions>();
+    if (accountName) {
+      await runAccountAction(globalOptions, accountName, async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        const status = await adapter.authStatus(context.account, context);
+        writeJson({
+          schema_version: "1",
+          command: "auth-status",
+          account: context.account.name,
+          provider: context.account.provider,
+          transport: context.account.transport,
+          status,
+        });
+      });
+      return;
+    }
+
+    await runAction(globalOptions, async (context) => {
+      const statuses = [];
+      for (const account of context.db.listAccounts()) {
+        const adapter = resolveProviderAdapter(account);
+        const accountContext = createAccountRuntimeContext(context, account);
+        const status = await adapter.authStatus(account, accountContext);
+        statuses.push({
+          account: account.name,
+          provider: account.provider,
+          transport: account.transport,
+          status,
+        });
+      }
+
+      writeJson({
+        schema_version: "1",
+        command: "auth-status",
+        accounts: statuses,
+      });
+    });
+  });
+
+authCommand
+  .command("logout")
+  .argument("<account>", "Logical account name")
+  .action(async (accountName: string, _options, command: Command) => {
+    await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
+      const adapter = resolveProviderAdapter(context.account);
+      const status = await adapter.logout(context.account, context);
+      writeJson({
+        schema_version: "1",
+        command: "auth-logout",
+        account: context.account.name,
+        status,
+      });
+    });
+  });
+
+const mailCommand = program.command("mail").description("Search, fetch, and read mail.");
+
+mailCommand
+  .command("search")
+  .requiredOption("--account <account>", "Logical account name")
+  .requiredOption("--text <query>", "Free-text search query")
+  .addOption(new Option("--limit <limit>", "Max results to return").argParser(positiveInt))
+  .action(async (options, command: Command) => {
+    await runAccountAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      options.account,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        const threads = await adapter.search(
+          context.account,
+          {
+            text: options.text,
+            limit: options.limit ?? context.config.defaultResultLimit,
+            unread_only: false,
+          },
+          context,
+        );
+
+        writeJson({
+          schema_version: "1",
+          command: "search",
+          generated_at: nowIsoUtc(),
+          account: context.account.name,
+          query: {
+            text: options.text,
+            limit: options.limit ?? context.config.defaultResultLimit,
+            unread_only: false,
+          },
+          threads,
+        });
+      },
+    );
+  });
+
+mailCommand
+  .command("fetch-unread")
+  .requiredOption("--account <account>", "Logical account name")
+  .addOption(new Option("--limit <limit>", "Max threads to return").argParser(positiveInt))
+  .action(async (options, command: Command) => {
+    await runAccountAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      options.account,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        const threads = await adapter.fetchUnread(
+          context.account,
+          {
+            limit: options.limit ?? context.config.defaultResultLimit,
+            unread_only: true,
+          },
+          context,
+        );
+
+        writeJson({
+          schema_version: "1",
+          command: "fetch-unread",
+          generated_at: nowIsoUtc(),
+          account: context.account.name,
+          query: {
+            limit: options.limit ?? context.config.defaultResultLimit,
+            unread_only: true,
+          },
+          threads,
+        });
+      },
+    );
+  });
+
+mailCommand
+  .command("read")
+  .argument("<message_ref>", "Stable message ref")
+  .option("--refresh", "Bypass local cache and fetch live", false)
+  .action(async (messageRef: string, options, command: Command) => {
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.readMessage(context.account, messageRef, Boolean(options.refresh), context));
+      },
+    );
+  });
+
+const attachmentCommand = program.command("attachment").description("Inspect and download attachments.");
+
+attachmentCommand
+  .command("list")
+  .argument("<message_ref>", "Stable message ref")
+  .action(async (messageRef: string, options, command: Command) => {
+    void options;
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.listAttachments(context.account, messageRef, context));
+      },
+    );
+  });
+
+attachmentCommand
+  .command("download")
+  .argument("<message_ref>", "Stable message ref")
+  .argument("<attachment_id>", "Stable attachment id")
+  .action(async (messageRef: string, attachmentId: string, options, command: Command) => {
+    void options;
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.downloadAttachment(context.account, messageRef, attachmentId, context));
+      },
+    );
+  });
+
+const cacheCommand = program.command("cache").description("Inspect and manage cache state.");
+
+cacheCommand.command("stats").action(async (_options, command: Command) => {
+  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+    writeJson({
+      schema_version: "1",
+      command: "cache-stats",
+      cache_root: context.paths.rootDir,
+      sizes: {
+        state_db_bytes: existsSync(context.paths.stateDbPath) ? statSync(context.paths.stateDbPath).size : 0,
+        auth_bytes: directorySizeBytes(context.paths.authDir),
+        cache_bytes: directorySizeBytes(context.paths.cacheDir),
+        downloads_bytes: directorySizeBytes(context.paths.downloadsDir),
+      },
+    });
+  });
+});
+
+cacheCommand.command("prune").action(async (_options, command: Command) => {
+  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+    writeJson({
+      schema_version: "1",
+      command: "cache-prune",
+      status: "noop",
+      cache_root: context.paths.cacheDir,
+    });
+  });
+});
+
+cacheCommand
+  .command("clear")
+  .option("--account <account>", "Clear cached bodies for one account")
+  .option("--message <message_ref>", "Clear cached bodies for one message ref")
+  .option("--all", "Clear all cached bodies", false)
+  .action(async (options, command: Command) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+      if (options.all) {
+        rmSync(context.paths.cacheDir, { recursive: true, force: true });
+        writeJson({
+          schema_version: "1",
+          command: "cache-clear",
+          cleared: "all",
+        });
+        return;
+      }
+
+      if (options.account) {
+        const account = context.db.findAccountByName(options.account);
+        if (!account) {
+          throw new SurfaceError("not_found", `Account '${options.account}' was not found.`, {
+            account: options.account,
+          });
+        }
+        const accountCacheDir = join(context.paths.cacheDir, account.account_id);
+        rmSync(accountCacheDir, { recursive: true, force: true });
+        writeJson({
+          schema_version: "1",
+          command: "cache-clear",
+          cleared: "account",
+          account: options.account,
+        });
+        return;
+      }
+
+      if (options.message) {
+        for (const account of context.db.listAccounts()) {
+          const messageCacheDir = join(context.paths.cacheDir, account.account_id, "messages", options.message);
+          rmSync(messageCacheDir, { recursive: true, force: true });
+        }
+        writeJson({
+          schema_version: "1",
+          command: "cache-clear",
+          cleared: "message",
+          message_ref: options.message,
+        });
+        return;
+      }
+
+      throw new SurfaceError(
+        "invalid_argument",
+        "Specify one of --account, --message, or --all for cache clear.",
+      );
+    });
+  });
+
+program.parseAsync(process.argv).catch((error: unknown) => {
+  writeJson(errorToEnvelope(error));
+  process.exitCode = 1;
+});
