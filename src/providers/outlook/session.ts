@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
@@ -38,6 +40,7 @@ function resolveChromeExecutablePath(): string {
 export interface OutlookSession {
   context: BrowserContext;
   page: Page;
+  cleanup?: () => void;
 }
 
 export async function launchOutlookSession(
@@ -45,8 +48,16 @@ export async function launchOutlookSession(
   options: { headless: boolean },
 ): Promise<OutlookSession> {
   mkdirSync(profileDir, { recursive: true });
+  let effectiveProfileDir = profileDir;
+  let cleanup: (() => void) | undefined;
 
-  const context = await chromium.launchPersistentContext(profileDir, {
+  if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
+    effectiveProfileDir = join(tmpdir(), `surface-outlook-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    cpSync(profileDir, effectiveProfileDir, { recursive: true });
+    cleanup = () => rmSync(effectiveProfileDir, { recursive: true, force: true });
+  }
+
+  const context = await chromium.launchPersistentContext(effectiveProfileDir, {
     executablePath: resolveChromeExecutablePath(),
     headless: options.headless,
     viewport: { width: 1440, height: 960 },
@@ -54,7 +65,11 @@ export async function launchOutlookSession(
 
   const page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(15_000);
-  return { context, page };
+  return {
+    context,
+    page,
+    ...(cleanup ? { cleanup } : {}),
+  };
 }
 
 async function bodyText(page: Page): Promise<string> {

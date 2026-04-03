@@ -1,12 +1,40 @@
 import Database from "better-sqlite3";
-import type { DatabaseConnection } from "better-sqlite3";
 
 import type { MailAccount } from "../contracts/account.js";
+import type { ThreadParticipant, ThreadSummary } from "../contracts/mail.js";
 import { makeAccountId } from "../refs.js";
 import { nowIsoUtc } from "../lib/time.js";
 
+export interface StoredMessageRecord {
+  message_ref: string;
+  account_id: string;
+  thread_ref: string;
+  subject: string | null;
+  from_name: string | null;
+  from_email: string | null;
+  to_json: string;
+  cc_json: string;
+  sent_at: string | null;
+  received_at: string | null;
+  unread: number;
+  snippet: string;
+  body_cache_path: string | null;
+  body_cached: number;
+  body_truncated: number;
+  body_cached_bytes: number;
+  invite_json: string | null;
+}
+
+export interface StoredProviderLocator {
+  entity_kind: string;
+  entity_ref: string;
+  account_id: string;
+  provider_key: string;
+  locator_json: string;
+}
+
 export class SurfaceDatabase {
-  readonly connection: DatabaseConnection;
+  readonly connection: InstanceType<typeof Database>;
 
   constructor(path: string) {
     this.connection = new Database(path);
@@ -36,6 +64,7 @@ export class SurfaceDatabase {
         account_id TEXT NOT NULL,
         subject TEXT,
         mailbox TEXT,
+        participants_json TEXT NOT NULL DEFAULT '[]',
         labels_json TEXT NOT NULL DEFAULT '[]',
         received_at TEXT,
         message_count INTEGER NOT NULL DEFAULT 0,
@@ -63,6 +92,7 @@ export class SurfaceDatabase {
         body_cached INTEGER NOT NULL DEFAULT 0,
         body_truncated INTEGER NOT NULL DEFAULT 0,
         body_cached_bytes INTEGER NOT NULL DEFAULT 0,
+        invite_json TEXT,
         first_seen_at TEXT NOT NULL,
         last_synced_at TEXT NOT NULL,
         FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -92,8 +122,11 @@ export class SurfaceDatabase {
       CREATE TABLE IF NOT EXISTS provider_locators (
         entity_kind TEXT NOT NULL,
         entity_ref TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        provider_key TEXT NOT NULL,
         locator_json TEXT NOT NULL,
-        PRIMARY KEY(entity_kind, entity_ref)
+        PRIMARY KEY(entity_kind, entity_ref),
+        UNIQUE(entity_kind, account_id, provider_key)
       );
 
       CREATE TABLE IF NOT EXISTS summaries (
@@ -107,6 +140,67 @@ export class SurfaceDatabase {
         FOREIGN KEY(thread_ref) REFERENCES threads(thread_ref) ON DELETE CASCADE
       );
     `);
+
+    this.ensureColumn("threads", "participants_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("messages", "invite_json", "TEXT");
+    this.ensureProviderLocatorSchema();
+  }
+
+  private tableColumns(tableName: string): string[] {
+    return (
+      this.connection
+        .prepare(`PRAGMA table_info(${tableName})`)
+        .all() as Array<{ name: string }>
+    ).map((column) => column.name);
+  }
+
+  private ensureColumn(tableName: string, columnName: string, definition: string): void {
+    if (this.tableColumns(tableName).includes(columnName)) {
+      return;
+    }
+    this.connection.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  private ensureProviderLocatorSchema(): void {
+    const columns = this.tableColumns("provider_locators");
+    if (columns.includes("account_id") && columns.includes("provider_key")) {
+      return;
+    }
+
+    this.connection.exec(`
+      ALTER TABLE provider_locators RENAME TO provider_locators_legacy;
+
+      CREATE TABLE provider_locators (
+        entity_kind TEXT NOT NULL,
+        entity_ref TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        provider_key TEXT NOT NULL,
+        locator_json TEXT NOT NULL,
+        PRIMARY KEY(entity_kind, entity_ref),
+        UNIQUE(entity_kind, account_id, provider_key)
+      );
+    `);
+
+    if (columns.length > 0) {
+      this.connection.exec(`
+        INSERT OR IGNORE INTO provider_locators (
+          entity_kind,
+          entity_ref,
+          account_id,
+          provider_key,
+          locator_json
+        )
+        SELECT
+          entity_kind,
+          entity_ref,
+          '',
+          entity_ref,
+          locator_json
+        FROM provider_locators_legacy;
+      `);
+    }
+
+    this.connection.exec("DROP TABLE IF EXISTS provider_locators_legacy;");
   }
 
   upsertAccount(input: {
@@ -224,6 +318,415 @@ export class SurfaceDatabase {
     return existing;
   }
 
+  transaction<T>(work: () => T): T {
+    return (this.connection as unknown as {
+      transaction: <F extends () => T>(fn: F) => F;
+    }).transaction(work)();
+  }
+
+  findEntityRefByProviderKey(
+    entityKind: "thread" | "message" | "attachment",
+    accountId: string,
+    providerKey: string,
+  ): string | undefined {
+    const row = this.connection
+      .prepare(
+        `
+        SELECT entity_ref
+        FROM provider_locators
+        WHERE entity_kind = ?
+          AND account_id = ?
+          AND provider_key = ?
+        LIMIT 1
+        `,
+      )
+      .get(entityKind, accountId, providerKey) as { entity_ref: string } | undefined;
+    return row?.entity_ref;
+  }
+
+  upsertProviderLocator(input: {
+    entity_kind: "thread" | "message" | "attachment";
+    entity_ref: string;
+    account_id: string;
+    provider_key: string;
+    locator_json: string;
+  }): void {
+    this.connection
+      .prepare(
+        `
+        INSERT INTO provider_locators (
+          entity_kind,
+          entity_ref,
+          account_id,
+          provider_key,
+          locator_json
+        ) VALUES (
+          @entity_kind,
+          @entity_ref,
+          @account_id,
+          @provider_key,
+          @locator_json
+        )
+        ON CONFLICT(entity_kind, entity_ref) DO UPDATE SET
+          account_id = excluded.account_id,
+          provider_key = excluded.provider_key,
+          locator_json = excluded.locator_json
+        `,
+      )
+      .run(input);
+  }
+
+  findProviderLocator(
+    entityKind: "thread" | "message" | "attachment",
+    entityRef: string,
+  ): StoredProviderLocator | undefined {
+    return this.connection
+      .prepare(
+        `
+        SELECT entity_kind, entity_ref, account_id, provider_key, locator_json
+        FROM provider_locators
+        WHERE entity_kind = ?
+          AND entity_ref = ?
+        LIMIT 1
+        `,
+      )
+      .get(entityKind, entityRef) as StoredProviderLocator | undefined;
+  }
+
+  upsertThread(input: {
+    thread_ref: string;
+    account_id: string;
+    subject: string;
+    participants: ThreadParticipant[];
+    mailbox: string;
+    labels: string[];
+    received_at: string | null;
+    message_count: number;
+    unread_count: number;
+    has_attachments: boolean;
+  }): void {
+    const timestamp = nowIsoUtc();
+    const existing = this.connection
+      .prepare("SELECT thread_ref FROM threads WHERE thread_ref = ? LIMIT 1")
+      .get(input.thread_ref) as { thread_ref: string } | undefined;
+
+    if (!existing) {
+      this.connection
+        .prepare(
+          `
+          INSERT INTO threads (
+            thread_ref,
+            account_id,
+            subject,
+            mailbox,
+            participants_json,
+            labels_json,
+            received_at,
+            message_count,
+            unread_count,
+            has_attachments,
+            first_seen_at,
+            last_synced_at
+          ) VALUES (
+            @thread_ref,
+            @account_id,
+            @subject,
+            @mailbox,
+            @participants_json,
+            @labels_json,
+            @received_at,
+            @message_count,
+            @unread_count,
+            @has_attachments,
+            @first_seen_at,
+            @last_synced_at
+          )
+          `,
+        )
+        .run({
+          ...input,
+          participants_json: JSON.stringify(input.participants),
+          labels_json: JSON.stringify(input.labels),
+          has_attachments: input.has_attachments ? 1 : 0,
+          first_seen_at: timestamp,
+          last_synced_at: timestamp,
+        });
+      return;
+    }
+
+    this.connection
+      .prepare(
+        `
+        UPDATE threads
+        SET subject = @subject,
+            mailbox = @mailbox,
+            participants_json = @participants_json,
+            labels_json = @labels_json,
+            received_at = @received_at,
+            message_count = @message_count,
+            unread_count = @unread_count,
+            has_attachments = @has_attachments,
+            last_synced_at = @last_synced_at
+        WHERE thread_ref = @thread_ref
+        `,
+      )
+      .run({
+        ...input,
+        participants_json: JSON.stringify(input.participants),
+        labels_json: JSON.stringify(input.labels),
+        has_attachments: input.has_attachments ? 1 : 0,
+        last_synced_at: timestamp,
+      });
+  }
+
+  upsertMessage(input: {
+    message_ref: string;
+    account_id: string;
+    thread_ref: string;
+    subject: string | null;
+    from_name: string | null;
+    from_email: string | null;
+    to_json: string;
+    cc_json: string;
+    sent_at: string | null;
+    received_at: string | null;
+    unread: boolean;
+    snippet: string;
+    body_cache_path: string | null;
+    body_cached: boolean;
+    body_truncated: boolean;
+    body_cached_bytes: number;
+    invite_json: string | null;
+  }): void {
+    const timestamp = nowIsoUtc();
+    const existing = this.connection
+      .prepare("SELECT message_ref FROM messages WHERE message_ref = ? LIMIT 1")
+      .get(input.message_ref) as { message_ref: string } | undefined;
+
+    const payload = {
+      ...input,
+      unread: input.unread ? 1 : 0,
+      body_cached: input.body_cached ? 1 : 0,
+      body_truncated: input.body_truncated ? 1 : 0,
+    };
+
+    if (!existing) {
+      this.connection
+        .prepare(
+          `
+          INSERT INTO messages (
+            message_ref,
+            account_id,
+            thread_ref,
+            subject,
+            from_name,
+            from_email,
+            to_json,
+            cc_json,
+            sent_at,
+            received_at,
+            unread,
+            snippet,
+            body_cache_path,
+            body_cached,
+            body_truncated,
+            body_cached_bytes,
+            invite_json,
+            first_seen_at,
+            last_synced_at
+          ) VALUES (
+            @message_ref,
+            @account_id,
+            @thread_ref,
+            @subject,
+            @from_name,
+            @from_email,
+            @to_json,
+            @cc_json,
+            @sent_at,
+            @received_at,
+            @unread,
+            @snippet,
+            @body_cache_path,
+            @body_cached,
+            @body_truncated,
+            @body_cached_bytes,
+            @invite_json,
+            @first_seen_at,
+            @last_synced_at
+          )
+          `,
+        )
+        .run({
+          ...payload,
+          first_seen_at: timestamp,
+          last_synced_at: timestamp,
+        });
+      return;
+    }
+
+    this.connection
+      .prepare(
+        `
+        UPDATE messages
+        SET thread_ref = @thread_ref,
+            subject = @subject,
+            from_name = @from_name,
+            from_email = @from_email,
+            to_json = @to_json,
+            cc_json = @cc_json,
+            sent_at = @sent_at,
+            received_at = @received_at,
+            unread = @unread,
+            snippet = @snippet,
+            body_cache_path = @body_cache_path,
+            body_cached = @body_cached,
+            body_truncated = @body_truncated,
+            body_cached_bytes = @body_cached_bytes,
+            invite_json = @invite_json,
+            last_synced_at = @last_synced_at
+        WHERE message_ref = @message_ref
+        `,
+      )
+      .run({
+        ...payload,
+        last_synced_at: timestamp,
+      });
+  }
+
+  replaceThreadMessages(threadRef: string, messageRefs: string[]): void {
+    this.connection.prepare("DELETE FROM thread_messages WHERE thread_ref = ?").run(threadRef);
+    const insert = this.connection.prepare(
+      `
+      INSERT INTO thread_messages (
+        thread_ref,
+        message_ref,
+        position
+      ) VALUES (?, ?, ?)
+      `,
+    );
+    for (const [index, messageRef] of messageRefs.entries()) {
+      insert.run(threadRef, messageRef, index);
+    }
+  }
+
+  replaceAttachments(
+    messageRef: string,
+    attachments: Array<{
+      attachment_id: string;
+      filename: string;
+      mime_type: string;
+      size_bytes: number | null;
+      inline: boolean;
+      saved_to: string | null;
+    }>,
+  ): void {
+    this.connection.prepare("DELETE FROM attachments WHERE message_ref = ?").run(messageRef);
+    const insert = this.connection.prepare(
+      `
+      INSERT INTO attachments (
+        attachment_id,
+        message_ref,
+        filename,
+        mime_type,
+        size_bytes,
+        inline,
+        saved_to
+      ) VALUES (
+        @attachment_id,
+        @message_ref,
+        @filename,
+        @mime_type,
+        @size_bytes,
+        @inline,
+        @saved_to
+      )
+      `,
+    );
+
+    for (const attachment of attachments) {
+      insert.run({
+        ...attachment,
+        message_ref: messageRef,
+        inline: attachment.inline ? 1 : 0,
+      });
+    }
+  }
+
+  upsertSummary(threadRef: string, summary: ThreadSummary): void {
+    this.connection
+      .prepare(
+        `
+        INSERT INTO summaries (
+          thread_ref,
+          backend,
+          model,
+          brief,
+          needs_action,
+          importance,
+          generated_at
+        ) VALUES (
+          @thread_ref,
+          @backend,
+          @model,
+          @brief,
+          @needs_action,
+          @importance,
+          @generated_at
+        )
+        ON CONFLICT(thread_ref) DO UPDATE SET
+          backend = excluded.backend,
+          model = excluded.model,
+          brief = excluded.brief,
+          needs_action = excluded.needs_action,
+          importance = excluded.importance,
+          generated_at = excluded.generated_at
+        `,
+      )
+      .run({
+        thread_ref: threadRef,
+        backend: summary.backend,
+        model: summary.model,
+        brief: summary.brief,
+        needs_action: summary.needs_action ? 1 : 0,
+        importance: summary.importance,
+        generated_at: nowIsoUtc(),
+      });
+  }
+
+  findSummary(threadRef: string): ThreadSummary | null {
+    const row = this.connection
+      .prepare(
+        `
+        SELECT backend, model, brief, needs_action, importance
+        FROM summaries
+        WHERE thread_ref = ?
+        LIMIT 1
+        `,
+      )
+      .get(threadRef) as
+      | {
+          backend: string;
+          model: string;
+          brief: string;
+          needs_action: number;
+          importance: "low" | "medium" | "high";
+        }
+      | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      backend: row.backend,
+      model: row.model,
+      brief: row.brief,
+      needs_action: Boolean(row.needs_action),
+      importance: row.importance,
+    };
+  }
+
   listAttachmentsForMessage(messageRef: string): Array<{
     attachment_id: string;
     filename: string;
@@ -249,6 +752,36 @@ export class SurfaceDatabase {
       inline: number;
       saved_to: string | null;
     }>;
+  }
+
+  getStoredMessage(messageRef: string): StoredMessageRecord | undefined {
+    return this.connection
+      .prepare(
+        `
+        SELECT
+          message_ref,
+          account_id,
+          thread_ref,
+          subject,
+          from_name,
+          from_email,
+          to_json,
+          cc_json,
+          sent_at,
+          received_at,
+          unread,
+          snippet,
+          body_cache_path,
+          body_cached,
+          body_truncated,
+          body_cached_bytes,
+          invite_json
+        FROM messages
+        WHERE message_ref = ?
+        LIMIT 1
+        `,
+      )
+      .get(messageRef) as StoredMessageRecord | undefined;
   }
 
   findMessageByRef(messageRef: string): {
