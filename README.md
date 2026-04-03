@@ -74,6 +74,7 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
 - live Outlook `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - summary backends for `openrouter` and `openclaw`
+- lean opt-in Outlook v1 live e2e coverage via `npm run e2e:outlook-v1`
 
 What is still intentionally incomplete:
 
@@ -81,7 +82,7 @@ What is still intentionally incomplete:
 - Gmail `search`, `fetch-unread`, `read`, and attachments
 - draft lifecycle commands
 - move / delete
-- broader automated tests and cache-prune policy
+- broader automated coverage beyond the opt-in Outlook v1 e2e script and cache-prune policy
 
 For Outlook auth:
 
@@ -93,6 +94,15 @@ If Chrome is installed in a non-default location, set:
 
 ```bash
 export SURFACE_CHROME_PATH="/absolute/path/to/Google Chrome"
+```
+
+For the live Outlook v1 e2e script:
+
+```bash
+export SURFACE_E2E_ENABLE=1
+export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
+export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
+npm run e2e:outlook-v1
 ```
 
 For live write-path testing, also set:

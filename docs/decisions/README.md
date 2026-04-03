@@ -40,3 +40,4 @@ Use zero-padded sequential numbers:
 - `0016-outlook-drafts-use-autosave-and-best-effort-resolution.md`
 - `0017-outlook-attachment-download-uses-owa-authenticated-rest.md`
 - `0018-outlook-read-state-uses-absolute-rest-patch.md`
+- `0019-live-e2e-stays-opt-in-and-cli-driven.md`

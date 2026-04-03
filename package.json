@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "tsx src/cli.ts",
-    "surface": "tsx src/cli.ts"
+    "surface": "tsx src/cli.ts",
+    "e2e:outlook-v1": "tsx src/e2e/outlook-v1.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
