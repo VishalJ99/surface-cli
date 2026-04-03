@@ -23,6 +23,17 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface auth status [account]`
 - `surface auth logout <account>`
 
+Gmail auth notes:
+
+- `surface auth login <account>` for `gmail-api` uses a loopback OAuth flow and prints the Google
+  authorization URL to `stderr`
+- Gmail auth resolves desktop OAuth credentials from:
+  - `SURFACE_GMAIL_CLIENT_SECRET_FILE`
+  - the stored per-account copy under `~/.surface-cli/auth/<account_id>/client_secret.json`
+  - `./client_secret.json` in the current working directory
+- Gmail auth stores refresh-token state under:
+  - `~/.surface-cli/auth/<account_id>/gmail-token.json`
+
 ### Mail
 
 - `surface mail search ...`

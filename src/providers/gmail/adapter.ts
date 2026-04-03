@@ -1,6 +1,3 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-
 import type { MailAccount } from "../../contracts/account.js";
 import type {
   ArchiveResultEnvelope,
@@ -20,33 +17,44 @@ import type {
 } from "../../contracts/mail.js";
 import { notImplemented } from "../../lib/errors.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
-
-function gmailTokenPath(context: ProviderContext): string {
-  return join(context.accountPaths.authDir, "gmail-token.json");
-}
+import { clearGmailAuthState, gmailAuthStatus, runGmailLogin } from "./oauth.js";
 
 export class GmailApiAdapter implements MailProviderAdapter {
   readonly provider = "gmail" as const;
   readonly transport = "gmail-api";
 
-  async login(account: MailAccount): Promise<AuthStatus> {
-    notImplemented(
-      "Gmail OAuth login is not wired yet. The next step is to port the legacy desktop OAuth flow into this adapter.",
-      account.name,
-    );
+  async login(account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
+    const result = await runGmailLogin(account, context);
+    if (result.authenticatedEmail && result.authenticatedEmail !== account.email) {
+      context.db.upsertAccount({
+        name: account.name,
+        provider: account.provider,
+        transport: account.transport,
+        email: result.authenticatedEmail,
+      });
+    }
+
+    return {
+      status: "authenticated",
+      detail: result.authenticatedEmail
+        ? `Authenticated as ${result.authenticatedEmail}.`
+        : "Gmail OAuth complete.",
+    };
   }
 
-  async logout(account: MailAccount): Promise<AuthStatus> {
-    notImplemented(
-      "Gmail logout is not wired yet. For now, remove the auth state under ~/.surface-cli/auth/<account_id>/ manually.",
-      account.name,
-    );
+  async logout(_account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
+    clearGmailAuthState(context);
+    return {
+      status: "unauthenticated",
+      detail: "Removed the stored Gmail token and copied client secret for this account.",
+    };
   }
 
-  async authStatus(_account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
-    return existsSync(gmailTokenPath(context))
-      ? { status: "authenticated", detail: "Refresh token file is present." }
-      : { status: "unauthenticated", detail: "No Gmail token file found for this account." };
+  async authStatus(account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
+    const status = await gmailAuthStatus(account, context);
+    return status.authenticated
+      ? { status: "authenticated", detail: status.detail }
+      : { status: "unauthenticated", detail: status.detail };
   }
 
   async search(account: MailAccount, _query: SearchQuery): Promise<NormalizedThreadRecord[]> {

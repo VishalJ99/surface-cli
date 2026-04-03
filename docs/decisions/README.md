@@ -41,3 +41,4 @@ Use zero-padded sequential numbers:
 - `0017-outlook-attachment-download-uses-owa-authenticated-rest.md`
 - `0018-outlook-read-state-uses-absolute-rest-patch.md`
 - `0019-live-e2e-stays-opt-in-and-cli-driven.md`
+- `0020-gmail-auth-uses-loopback-oauth-and-refresh-tokens.md`

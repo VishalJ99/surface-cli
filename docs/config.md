@@ -79,6 +79,8 @@ Suggested default path:
 - `SURFACE_SUMMARIZER_TIMEOUT_MS`
 - `SURFACE_OPENCLAW_AGENT`
 - `OPENROUTER_API_KEY`
+- `SURFACE_GMAIL_CLIENT_SECRET_FILE`
+- `SURFACE_GMAIL_CALLBACK_PORT`
 - `SURFACE_WRITES_ENABLED`
 - `SURFACE_SEND_MODE`
 - `SURFACE_TEST_RECIPIENTS`
@@ -98,6 +100,27 @@ Summarizer backend runtime requirements:
   The default agent id is `main`, or `SURFACE_OPENCLAW_AGENT` if set.
   If OpenClaw model auth is stale or unavailable, Surface should still return mail results
   with `summary: null`.
+
+Gmail auth runtime requirements:
+
+- `SURFACE_GMAIL_CLIENT_SECRET_FILE`
+  Optional path to a Google desktop OAuth client secret JSON file.
+  If unset, Surface also checks:
+  - the account-scoped stored copy under `~/.surface-cli/auth/<account_id>/client_secret.json`
+  - `./client_secret.json` in the current working directory
+- `SURFACE_GMAIL_CALLBACK_PORT`
+  Optional loopback callback port for Gmail OAuth.
+  Default: `8765`
+
+For headless remote setup, the expected pattern is:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 <host>
+surface auth login <gmail-account>
+```
+
+Then open the printed Google auth URL in a browser on the machine where `localhost:8765`
+is forwarded back to the Surface host.
 
 For a public repo, prefer local environment variables for write safety instead of
 committing real recipient addresses into tracked files.
