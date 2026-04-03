@@ -57,6 +57,19 @@ Do not invent behavior that conflicts with these docs.
 - `read` returns attachment metadata only.
 - Attachment download is a separate command.
 
+## Autonomous Development Safety
+
+- Treat live mailboxes as production data even during development.
+- Read-path commands may run autonomously against configured accounts.
+- Write actions must remain draft-first unless explicit send behavior is both implemented and locally enabled.
+- Do not hardcode real personal email addresses into the public repo for testing.
+- Use local-only config or environment variables for test recipients and write-action allowlists.
+- Autonomous send tests must only target recipients on the configured allowlist.
+- Autonomous test messages should use a clear subject prefix such as `[surface-test]`.
+- Prefer self-addressed or sink-mailbox tests over third-party recipients.
+- When testing writes, record the created draft or sent message refs in the final response so cleanup is possible.
+- If write safety configuration is missing, do not send mail. Draft creation may still be acceptable if the current task requires it.
+
 ## Documentation Rules
 
 When changing public behavior:

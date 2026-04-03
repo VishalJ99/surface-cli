@@ -53,6 +53,24 @@ Suggested default path:
   Timeout budget for summarization requests.
   Default: `20000`
 
+### Autonomous Test Safety
+
+- `writes_enabled`
+  Values: `true`, `false`
+  Default: `false`
+- `send_mode`
+  Values: `draft_only`, `allow_send`
+  Default: `draft_only`
+- `test_subject_prefix`
+  Prefix applied to autonomous test drafts or sends.
+  Default: `[surface-test]`
+- `test_recipients`
+  Local-only allowlist of email addresses that automated test sends may target.
+  Default: empty
+- `test_account_allowlist`
+  Optional list of account names that automation may use for write-path testing.
+  Default: empty
+
 ## Candidate Environment Variables
 
 - `SURFACE_CACHE_DIR`
@@ -62,9 +80,34 @@ Suggested default path:
 - `SURFACE_SUMMARIZER_MODEL`
 - `SURFACE_SUMMARY_INPUT_MAX_BYTES`
 - `SURFACE_SUMMARIZER_TIMEOUT_MS`
+- `SURFACE_WRITES_ENABLED`
+- `SURFACE_SEND_MODE`
+- `SURFACE_TEST_SUBJECT_PREFIX`
+- `SURFACE_TEST_RECIPIENTS`
+- `SURFACE_TEST_ACCOUNT_ALLOWLIST`
 
 Secrets such as API keys should not be stored in the config file. They should live in
 environment variables or provider/account-specific auth storage.
+
+For a public repo, prefer local environment variables for write safety instead of
+committing real recipient addresses into tracked files.
+
+Example local-only setup:
+
+```bash
+export SURFACE_WRITES_ENABLED=1
+export SURFACE_SEND_MODE=draft_only
+export SURFACE_TEST_SUBJECT_PREFIX='[surface-test]'
+export SURFACE_TEST_RECIPIENTS='personal@example.com,work@example.com'
+export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni,work'
+```
+
+Recommended behavior for future write-path implementation:
+
+- if `SURFACE_WRITES_ENABLED` is not set, do not send
+- if `SURFACE_SEND_MODE=draft_only`, only create drafts
+- if `SURFACE_SEND_MODE=allow_send`, only send when every recipient is on `SURFACE_TEST_RECIPIENTS`
+- reject autonomous sends when the acting account is not on `SURFACE_TEST_ACCOUNT_ALLOWLIST`
 
 ## Questions To Freeze In M1
 
