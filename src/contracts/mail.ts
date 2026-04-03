@@ -33,6 +33,8 @@ export interface ThreadSummary {
   importance: "low" | "medium" | "high";
 }
 
+export type RsvpResponse = "accept" | "decline" | "tentative";
+
 export interface MessageEnvelope {
   subject?: string;
   from: MessageParticipant | null;
@@ -58,17 +60,20 @@ export interface AttachmentMeta {
   inline: boolean;
 }
 
+export interface MessageInvite {
+  is_invite: boolean;
+  rsvp_supported: boolean;
+  response_status: string | null;
+  available_rsvp_responses: RsvpResponse[];
+}
+
 export interface MessageResult {
   message_ref: string;
   envelope: MessageEnvelope;
   snippet: string;
   body: MessageBody;
   attachments: AttachmentMeta[];
-  invite?: {
-    is_invite: boolean;
-    rsvp_supported: boolean;
-    response_status: string | null;
-  };
+  invite?: MessageInvite;
 }
 
 export interface ThreadResult {
@@ -133,6 +138,17 @@ export interface AttachmentDownloadEnvelope {
   attachment: AttachmentMeta & {
     saved_to: string;
   };
+}
+
+export interface RsvpResultEnvelope {
+  schema_version: "1";
+  command: "rsvp";
+  account: string;
+  message_ref: string;
+  thread_ref: string;
+  source: SourceInfo;
+  response: RsvpResponse;
+  invite: MessageInvite | null;
 }
 
 export interface ProviderLocator {

@@ -5,6 +5,8 @@ import type {
   FetchUnreadQuery,
   NormalizedThreadRecord,
   ReadResultEnvelope,
+  RsvpResponse,
+  RsvpResultEnvelope,
   SearchQuery,
 } from "../contracts/mail.js";
 import type { AccountPaths, SurfacePaths } from "../paths.js";
@@ -52,6 +54,12 @@ export interface MailProviderAdapter {
     messageRef: string,
     context: ProviderContext,
   ): Promise<AttachmentListEnvelope>;
+  rsvp(
+    account: MailAccount,
+    messageRef: string,
+    response: RsvpResponse,
+    context: ProviderContext,
+  ): Promise<RsvpResultEnvelope>;
   downloadAttachment(
     account: MailAccount,
     messageRef: string,

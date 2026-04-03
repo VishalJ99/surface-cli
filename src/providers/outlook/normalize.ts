@@ -1,4 +1,4 @@
-import type { MessageParticipant } from "../../contracts/mail.js";
+import type { MessageParticipant, RsvpResponse } from "../../contracts/mail.js";
 import { htmlToText } from "../shared/html.js";
 
 export function mailboxFromExchange(value: Record<string, unknown> | null | undefined): MessageParticipant | null {
@@ -83,11 +83,40 @@ export function normalizeOutlookBody(item: Record<string, unknown>): {
   };
 }
 
+function normalizeResponseType(value: unknown): string | null {
+  if (typeof value !== "string" || !value) {
+    return null;
+  }
+
+  switch (value.toLowerCase()) {
+    case "accept":
+      return "accept";
+    case "decline":
+      return "decline";
+    case "tentative":
+      return "tentative";
+    case "unknown":
+      return null;
+    default:
+      return value;
+  }
+}
+
 export function buildOutlookInvite(item: Record<string, unknown>): {
   is_invite: boolean;
   rsvp_supported: boolean;
   response_status: string | null;
-  meeting: Record<string, unknown> | null;
+  available_rsvp_responses: RsvpResponse[];
+  meeting: {
+    request_type: unknown;
+    response_type: unknown;
+    organizer: MessageParticipant | null;
+    location: string | null;
+    start: unknown;
+    end: unknown;
+    associated_calendar_item: { id: string; change_key: string } | null;
+    available_rsvp_actions: string[];
+  } | null;
 } {
   const itemClass = typeof item.ItemClass === "string" ? item.ItemClass : "";
   const responseObjects = normalizeResponseObjects(item.ResponseObjects as Array<Record<string, unknown>> | undefined);
@@ -97,6 +126,7 @@ export function buildOutlookInvite(item: Record<string, unknown>): {
       is_invite: false,
       rsvp_supported: false,
       response_status: null,
+      available_rsvp_responses: [],
       meeting: null,
     };
   }
@@ -117,11 +147,22 @@ export function buildOutlookInvite(item: Record<string, unknown>): {
       ["AcceptItem", "TentativelyAcceptItem", "DeclineItem", "ProposeNewTime"].includes(action),
     ),
   };
+  const availableRsvpResponses = Array.from(
+    new Set<RsvpResponse>([
+      ...(meeting.available_rsvp_actions.includes("AcceptItem") ? ["accept" as const] : []),
+      ...(meeting.available_rsvp_actions.includes("DeclineItem") ? ["decline" as const] : []),
+      ...(meeting.available_rsvp_actions.includes("TentativelyAcceptItem") ? ["tentative" as const] : []),
+      ...(meeting.available_rsvp_actions.length === 0 && meeting.associated_calendar_item
+        ? ["accept" as const, "decline" as const, "tentative" as const]
+        : []),
+    ]),
+  );
 
   return {
     is_invite: true,
-    rsvp_supported: Array.isArray(meeting.available_rsvp_actions) && meeting.available_rsvp_actions.length > 0,
-    response_status: typeof item.ResponseType === "string" ? item.ResponseType : null,
+    rsvp_supported: availableRsvpResponses.length > 0,
+    response_status: normalizeResponseType(item.ResponseType),
+    available_rsvp_responses: availableRsvpResponses,
     meeting,
   };
 }

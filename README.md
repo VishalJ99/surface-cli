@@ -29,6 +29,7 @@ surface auth logout school
 surface mail fetch-unread --account work --limit 25
 surface mail search --account work --text invoice --limit 10
 surface mail read msg_01...
+surface mail rsvp msg_01... --response tentative
 
 surface attachment list msg_01...
 surface attachment download msg_01... att_01...
@@ -65,13 +66,16 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - adapter registry for `gmail-api` and `outlook-web-playwright`
 - donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
+- live Outlook `fetch-unread`, `search`, `read`, `attachment list`, and `rsvp`
+- summary backends for `openrouter` and `openclaw`
 
 What is still intentionally incomplete:
 
 - Gmail OAuth login wiring
 - Gmail `search`, `fetch-unread`, `read`, and attachments
-- Outlook `search`, `fetch-unread`, `read`, and attachments
-- summarizer backend execution
+- Outlook attachment download
+- reply / reply-all / forward / send / archive / move
+- broader automated tests and cache-prune policy
 
 For Outlook auth:
 

@@ -6,12 +6,15 @@ import type {
   AttachmentDownloadEnvelope,
   AttachmentListEnvelope,
   MessageEnvelope,
+  MessageInvite,
   MessageParticipant,
   NormalizedAttachmentRecord,
   NormalizedMessageRecord,
   FetchUnreadQuery,
   NormalizedThreadRecord,
   ReadResultEnvelope,
+  RsvpResponse,
+  RsvpResultEnvelope,
   SearchQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
@@ -32,11 +35,11 @@ import {
 } from "./extract.js";
 import {
   buildOutlookInvite,
+  itemIdData,
   mailboxFromExchange,
   mailboxesFromExchange,
   messageIdentity,
   normalizeOutlookBody,
-  normalizeResponseObjects,
 } from "./normalize.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 
@@ -96,6 +99,34 @@ function uniqueParticipants(messages: MessageEnvelope[]): ThreadParticipant[] {
   return participants;
 }
 
+function inferThreadRsvpStatus(messages: NormalizedMessageRecord[]): string | null {
+  let latest: { status: string; at: number } | null = null;
+
+  for (const message of messages) {
+    const subject = (message.envelope.subject ?? "").toLowerCase();
+    const timestamp = Date.parse(message.envelope.received_at ?? message.envelope.sent_at ?? "");
+    const at = Number.isFinite(timestamp) ? timestamp : 0;
+
+    if (subject.startsWith("accepted:")) {
+      if (!latest || at >= latest.at) {
+        latest = { status: "accept", at };
+      }
+    }
+    if (subject.startsWith("declined:")) {
+      if (!latest || at >= latest.at) {
+        latest = { status: "decline", at };
+      }
+    }
+    if (subject.startsWith("tentative:")) {
+      if (!latest || at >= latest.at) {
+        latest = { status: "tentative", at };
+      }
+    }
+  }
+
+  return latest?.status ?? null;
+}
+
 function buildAttachments(entry: OutlookConversationItem, messageKey: string): NormalizedAttachmentRecord[] {
   const rawItem = entry.item;
   const rawAttachments = Array.isArray(rawItem.Attachments)
@@ -139,10 +170,9 @@ function normalizeMessage(
     ?? mailboxFromExchange((item.Sender as Record<string, unknown> | undefined) ?? null);
   const to = mailboxesFromExchange(item.ToRecipients as Array<Record<string, unknown>> | undefined);
   const cc = mailboxesFromExchange(item.CcRecipients as Array<Record<string, unknown>> | undefined);
-  const messageId =
-    typeof (item.ItemId as Record<string, unknown> | undefined)?.Id === "string"
-      ? (item.ItemId as Record<string, unknown>).Id as string
-      : undefined;
+  const itemId = itemIdData((item.ItemId as Record<string, unknown> | undefined) ?? null);
+  const messageId = itemId?.id;
+  const messageChangeKey = itemId?.change_key;
   const internetMessageId = typeof item.InternetMessageId === "string" ? item.InternetMessageId : undefined;
   const instanceKey = typeof item.InstanceKey === "string" ? item.InstanceKey : undefined;
   const key = messageProviderKey(entry, conversationId);
@@ -165,6 +195,7 @@ function normalizeMessage(
     ...(messageId ? { message_id: messageId } : {}),
     ...(internetMessageId ? { internet_message_id: internetMessageId } : {}),
   };
+  const associatedCalendarItem = invite.meeting?.associated_calendar_item ?? null;
 
   return {
     message_ref: "",
@@ -183,6 +214,7 @@ function normalizeMessage(
             is_invite: invite.is_invite,
             rsvp_supported: invite.rsvp_supported,
             response_status: invite.response_status,
+            available_rsvp_responses: invite.available_rsvp_responses,
           },
         }
       : {}),
@@ -192,16 +224,34 @@ function normalizeMessage(
       locator: {
         conversation_id: conversationId,
         message_id: messageId ?? null,
+        message_change_key: messageChangeKey ?? null,
         internet_message_id: internetMessageId ?? null,
         instance_key: instanceKey ?? null,
         parent_internet_message_id: entry.nodeMetadata.parentInternetMessageId,
+        associated_calendar_item_id: associatedCalendarItem?.id ?? null,
+        associated_calendar_change_key: associatedCalendarItem?.change_key ?? null,
+        meeting_start: typeof invite.meeting?.start === "string" ? invite.meeting.start : null,
+        meeting_end: typeof invite.meeting?.end === "string" ? invite.meeting.end : null,
       },
     },
   };
 }
 
 function normalizeThread(bundle: OutlookThreadBundle): NormalizedThreadRecord {
-  const messages = bundle.entries.map((entry) => normalizeMessage(entry, bundle.conversationId));
+  const baseMessages = bundle.entries.map((entry) => normalizeMessage(entry, bundle.conversationId));
+  const inferredRsvpStatus = inferThreadRsvpStatus(baseMessages);
+  const messages = inferredRsvpStatus
+    ? baseMessages.map((message) =>
+        message.invite
+          ? {
+              ...message,
+              invite: {
+                ...message.invite,
+                response_status: inferredRsvpStatus,
+              },
+            }
+          : message)
+    : baseMessages;
   const latestMessage = messages[0] ?? null;
   const unreadCount = messages.filter((message) => message.envelope.unread).length;
   const hasAttachments = messages.some((message) => message.attachments.length > 0)
@@ -263,13 +313,43 @@ function parseStoredMessage(record: StoredMessageRecord) {
       cached: Boolean(record.body_cached),
       cached_bytes: record.body_cached_bytes,
     },
-    invite: record.invite_json ? JSON.parse(record.invite_json) : undefined,
+    invite: record.invite_json ? JSON.parse(record.invite_json) as MessageInvite : undefined,
   };
 }
 
 function locatorValue(locator: NormalizedThreadRecord["locator"] | NormalizedMessageRecord["locator"], key: string): string {
   const value = locator?.locator[key];
   return typeof value === "string" ? value : "";
+}
+
+interface OutlookMessageLocator {
+  conversation_id: string;
+  message_id: string | null;
+  message_change_key: string | null;
+  internet_message_id: string | null;
+  instance_key: string | null;
+  parent_internet_message_id: string | null;
+  associated_calendar_item_id: string | null;
+  associated_calendar_change_key: string | null;
+  meeting_start: string | null;
+  meeting_end: string | null;
+}
+
+function parseOutlookMessageLocator(locatorJson: string): OutlookMessageLocator {
+  const locator = JSON.parse(locatorJson) as Record<string, unknown>;
+  const stringOrNull = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+  return {
+    conversation_id: typeof locator.conversation_id === "string" ? locator.conversation_id : "",
+    message_id: stringOrNull(locator.message_id),
+    message_change_key: stringOrNull(locator.message_change_key),
+    internet_message_id: stringOrNull(locator.internet_message_id),
+    instance_key: stringOrNull(locator.instance_key),
+    parent_internet_message_id: stringOrNull(locator.parent_internet_message_id),
+    associated_calendar_item_id: stringOrNull(locator.associated_calendar_item_id),
+    associated_calendar_change_key: stringOrNull(locator.associated_calendar_change_key),
+    meeting_start: stringOrNull(locator.meeting_start),
+    meeting_end: stringOrNull(locator.meeting_end),
+  };
 }
 
 async function persistThreads(
@@ -412,6 +492,10 @@ async function persistThreads(
       }
 
       context.db.replaceThreadMessages(resolvedThreadRef, messageRefs);
+      const threadInviteStatus = inferThreadRsvpStatus(persistedMessages);
+      if (threadInviteStatus) {
+        context.db.updateInviteStatusForThread(resolvedThreadRef, threadInviteStatus);
+      }
       if (thread.summary) {
         context.db.upsertSummary(resolvedThreadRef, thread.summary);
       }
@@ -444,6 +528,233 @@ async function maybeSummarizeThreads(
     });
   }
   return summarized;
+}
+
+async function refreshOutlookConversation(
+  account: MailAccount,
+  conversationId: string,
+  context: ProviderContext,
+): Promise<void> {
+  const profileDir = outlookProfileDir(context);
+  const session = await launchOutlookSession(profileDir, { headless: true });
+  try {
+    const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
+      timeoutMs: context.config.providerTimeoutMs,
+    });
+    const bundle = await fetchConversationBundle(session.context.request, capturedSession, conversationId);
+    await persistThreads(account, context, [normalizeThread(bundle)]);
+  } finally {
+    await session.context.close();
+    session.cleanup?.();
+  }
+}
+
+async function refreshStoredMessage(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<StoredMessageRecord> {
+  const locatorRow = context.db.findProviderLocator("message", messageRef);
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  const locator = parseOutlookMessageLocator(locatorRow.locator_json);
+  if (!locator.conversation_id) {
+    throw new SurfaceError("transport_error", `Message '${messageRef}' is missing an Outlook conversation id.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  await refreshOutlookConversation(account, locator.conversation_id, context);
+  const refreshed = context.db.getStoredMessage(messageRef);
+  if (!refreshed) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' could not be refreshed from Outlook.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  return refreshed;
+}
+
+async function resolveRsvpLocator(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<{ locator: OutlookMessageLocator; stored: StoredMessageRecord }> {
+  let stored = context.db.getStoredMessage(messageRef);
+  if (!stored) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  if (!stored.invite_json) {
+    throw new SurfaceError("unsupported", `Message '${messageRef}' is not a meeting invite.`, {
+      account: account.name,
+      messageRef,
+      threadRef: stored.thread_ref,
+    });
+  }
+
+  let locatorRow = context.db.findProviderLocator("message", messageRef);
+  if (!locatorRow) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    locatorRow = context.db.findProviderLocator("message", messageRef);
+  }
+
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+      threadRef: stored.thread_ref,
+    });
+  }
+
+  let locator = parseOutlookMessageLocator(locatorRow.locator_json);
+  if (!locator.message_id || !locator.message_change_key) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    locatorRow = context.db.findProviderLocator("message", messageRef);
+    if (!locatorRow) {
+      throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+        account: account.name,
+        messageRef,
+        threadRef: stored.thread_ref,
+      });
+    }
+    locator = parseOutlookMessageLocator(locatorRow.locator_json);
+  }
+
+  if (!locator.message_id || !locator.message_change_key) {
+    throw new SurfaceError(
+      "unsupported",
+      `Message '${messageRef}' does not expose enough Outlook item metadata for RSVP actions.`,
+      {
+        account: account.name,
+        messageRef,
+        threadRef: stored.thread_ref,
+      },
+    );
+  }
+
+  return { locator, stored };
+}
+
+function buildCreateItemHeaders(headers: Record<string, string>): Record<string, string> {
+  return {
+    ...headers,
+    action: "CreateItem",
+    "content-type": "application/json; charset=utf-8",
+  };
+}
+
+function buildMeetingResponseType(response: RsvpResponse): "AcceptItem" | "DeclineItem" | "TentativelyAcceptItem" {
+  switch (response) {
+    case "accept":
+      return "AcceptItem";
+    case "decline":
+      return "DeclineItem";
+    case "tentative":
+      return "TentativelyAcceptItem";
+  }
+}
+
+function buildMeetingResponsePayload(locator: OutlookMessageLocator, response: RsvpResponse): Record<string, unknown> {
+  if (!locator.message_id || !locator.message_change_key) {
+    throw new SurfaceError("unsupported", "Outlook RSVP requires a message id and change key.");
+  }
+
+  return {
+    __type: "CreateItemJsonRequest:#Exchange",
+    Header: {
+      __type: "JsonRequestHeaders:#Exchange",
+      RequestServerVersion: "V2017_08_18",
+      TimeZoneContext: {
+        __type: "TimeZoneContext:#Exchange",
+        TimeZoneDefinition: {
+          __type: "TimeZoneDefinitionType:#Exchange",
+          Id: "GMT Standard Time",
+        },
+      },
+    },
+    Body: {
+      __type: "CreateItemRequest:#Exchange",
+      MessageDisposition: "SendAndSaveCopy",
+      Items: [
+        {
+          __type: `${buildMeetingResponseType(response)}:#Exchange`,
+          ReferenceItemId: {
+            __type: "ItemId:#Exchange",
+            Id: locator.message_id,
+            ChangeKey: locator.message_change_key,
+          },
+        },
+      ],
+    },
+  };
+}
+
+async function performOutlookRsvpAction(
+  session: Awaited<ReturnType<typeof launchOutlookSession>>,
+  locator: OutlookMessageLocator,
+  response: RsvpResponse,
+  timeoutMs: number,
+): Promise<void> {
+  const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
+    timeoutMs,
+  });
+  const serviceResponse = await session.context.request.post(
+    `${capturedSession.serviceUrl}?action=CreateItem&app=Mail&n=999`,
+    {
+      headers: buildCreateItemHeaders(capturedSession.headers),
+      data: JSON.stringify(buildMeetingResponsePayload(locator, response)),
+      timeout: timeoutMs,
+    },
+  );
+
+  if (!serviceResponse.ok()) {
+    throw new SurfaceError(
+      "transport_error",
+      `Outlook RSVP request failed with status ${serviceResponse.status()}.`,
+    );
+  }
+
+  const data = await serviceResponse.json();
+  const responseMessage = data?.Body?.ResponseMessages?.Items?.[0];
+  if (responseMessage?.ResponseCode !== "NoError") {
+    throw new SurfaceError(
+      "transport_error",
+      `Outlook RSVP request failed with response code '${responseMessage?.ResponseCode ?? "UnknownError"}'.`,
+    );
+  }
+}
+
+function buildRsvpEnvelope(
+  account: MailAccount,
+  messageRef: string,
+  threadRef: string,
+  response: RsvpResponse,
+  invite: MessageInvite | undefined,
+): RsvpResultEnvelope {
+  return {
+    schema_version: "1",
+    command: "rsvp",
+    account: account.name,
+    message_ref: messageRef,
+    thread_ref: threadRef,
+    source: {
+      provider: account.provider,
+      transport: account.transport,
+    },
+    response,
+    invite: invite ?? null,
+  };
 }
 
 function buildReadEnvelope(
@@ -620,48 +931,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     if (!refresh && hasReadableCache) {
       return buildReadEnvelope(account, messageRef, stored.thread_ref, parseStoredMessage(stored), attachments, "hit");
     }
-
-    const locatorRow = context.db.findProviderLocator("message", messageRef);
-    if (!locatorRow) {
-      if (hasReadableCache) {
-        return buildReadEnvelope(account, messageRef, stored.thread_ref, parseStoredMessage(stored), attachments, "hit");
-      }
-      throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
-        account: account.name,
-        messageRef,
-      });
-    }
-
-    const locator = JSON.parse(locatorRow.locator_json) as Record<string, string | null>;
-    const conversationId = typeof locator.conversation_id === "string" ? locator.conversation_id : "";
-    if (!conversationId) {
-      throw new SurfaceError("transport_error", `Message '${messageRef}' is missing an Outlook conversation id.`, {
-        account: account.name,
-        messageRef,
-      });
-    }
-
-    const profileDir = outlookProfileDir(context);
-    const session = await launchOutlookSession(profileDir, { headless: true });
-    try {
-      const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
-        timeoutMs: context.config.providerTimeoutMs,
-      });
-      const bundle = await fetchConversationBundle(session.context.request, capturedSession, conversationId);
-      const normalizedThread = normalizeThread(bundle);
-      await persistThreads(account, context, [normalizedThread]);
-    } finally {
-      await session.context.close();
-      session.cleanup?.();
-    }
-
-    const refreshed = context.db.getStoredMessage(messageRef);
-    if (!refreshed) {
-      throw new SurfaceError("not_found", `Message '${messageRef}' could not be refreshed from Outlook.`, {
-        account: account.name,
-        messageRef,
-      });
-    }
+    const refreshed = await refreshStoredMessage(account, messageRef, context);
 
     const refreshedAttachments = context.db.listAttachmentsForMessage(messageRef).map((attachment) => ({
       attachment_id: attachment.attachment_id,
@@ -706,6 +976,28 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
         inline: Boolean(attachment.inline),
       })),
     };
+  }
+
+  async rsvp(
+    account: MailAccount,
+    messageRef: string,
+    response: RsvpResponse,
+    context: ProviderContext,
+  ): Promise<RsvpResultEnvelope> {
+    const { locator, stored } = await resolveRsvpLocator(account, messageRef, context);
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+
+    try {
+      await performOutlookRsvpAction(session, locator, response, context.config.providerTimeoutMs);
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    const refreshed = await refreshStoredMessage(account, messageRef, context);
+    const parsed = parseStoredMessage(refreshed);
+    return buildRsvpEnvelope(account, messageRef, stored.thread_ref, response, parsed.invite);
   }
 
   async downloadAttachment(account: MailAccount): Promise<AttachmentDownloadEnvelope> {

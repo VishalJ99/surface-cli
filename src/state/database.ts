@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 
 import type { MailAccount } from "../contracts/account.js";
-import type { ThreadParticipant, ThreadSummary } from "../contracts/mail.js";
+import type { MessageInvite, ThreadParticipant, ThreadSummary } from "../contracts/mail.js";
 import { makeAccountId } from "../refs.js";
 import { nowIsoUtc } from "../lib/time.js";
 
@@ -782,6 +782,45 @@ export class SurfaceDatabase {
         `,
       )
       .get(messageRef) as StoredMessageRecord | undefined;
+  }
+
+  updateInviteStatusForThread(threadRef: string, responseStatus: string | null): void {
+    const rows = this.connection
+      .prepare(
+        `
+        SELECT message_ref, invite_json
+        FROM messages
+        WHERE thread_ref = ?
+          AND invite_json IS NOT NULL
+        `,
+      )
+      .all(threadRef) as Array<{ message_ref: string; invite_json: string }>;
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const update = this.connection.prepare(
+      `
+      UPDATE messages
+      SET invite_json = @invite_json,
+          last_synced_at = @last_synced_at
+      WHERE message_ref = @message_ref
+      `,
+    );
+    const lastSyncedAt = nowIsoUtc();
+
+    for (const row of rows) {
+      const invite = JSON.parse(row.invite_json) as MessageInvite;
+      update.run({
+        message_ref: row.message_ref,
+        invite_json: JSON.stringify({
+          ...invite,
+          response_status: responseStatus,
+        }),
+        last_synced_at: lastSyncedAt,
+      });
+    }
   }
 
   findMessageByRef(messageRef: string): {

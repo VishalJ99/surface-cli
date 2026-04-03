@@ -326,6 +326,30 @@ mailCommand
     );
   });
 
+mailCommand
+  .command("rsvp")
+  .argument("<message_ref>", "Stable message ref")
+  .requiredOption("--response <response>", "One of: accept, decline, tentative")
+  .action(async (messageRef: string, options, command: Command) => {
+    const response = String(options.response).toLowerCase();
+    if (!["accept", "decline", "tentative"].includes(response)) {
+      throw new SurfaceError(
+        "invalid_argument",
+        "RSVP response must be one of: accept, decline, tentative.",
+        { messageRef },
+      );
+    }
+
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.rsvp(context.account, messageRef, response as "accept" | "decline" | "tentative", context));
+      },
+    );
+  });
+
 const attachmentCommand = program.command("attachment").description("Inspect and download attachments.");
 
 attachmentCommand

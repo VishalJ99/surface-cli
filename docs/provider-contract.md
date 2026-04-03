@@ -25,6 +25,7 @@ Each provider implementation must support:
 - search
 - fetch-unread
 - read message
+- rsvp when meeting invites are supported by the provider
 - list attachments
 - download attachment
 
@@ -46,6 +47,11 @@ interface MailProviderAdapter {
   search(account: MailAccount, query: SearchQuery): Promise<ThreadResult[]>;
   fetchUnread(account: MailAccount, query: FetchUnreadQuery): Promise<ThreadResult[]>;
   readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<MessageReadResult>;
+  rsvp(
+    account: MailAccount,
+    messageRef: string,
+    response: "accept" | "decline" | "tentative",
+  ): Promise<RsvpResult>;
 
   listAttachments(account: MailAccount, messageRef: string): Promise<AttachmentMeta[]>;
   downloadAttachment(
@@ -86,6 +92,16 @@ Each account/provider transport should expose capability flags such as:
 - `rsvp`
 
 Capabilities are account/transport-level. Message applicability should be derived from message facts.
+
+## Invite And RSVP Rules
+
+- invite metadata belongs on the message object, not the summary
+- RSVP-capable providers should expose `invite.is_invite`, `invite.rsvp_supported`,
+  `invite.response_status`, and `invite.available_rsvp_responses`
+- `response_status` should reflect the latest known user response for that invite, even if the
+  original provider payload is stale and the provider must infer the state from newer messages
+- RSVP execution should be idempotent enough that repeated requests do not corrupt local state;
+  the provider should refresh and persist the latest thread state after an RSVP action
 
 ## Conformance Expectations
 

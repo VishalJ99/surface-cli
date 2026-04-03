@@ -28,6 +28,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface mail search ...`
 - `surface mail fetch-unread ...`
 - `surface mail read <message_ref>`
+- `surface mail rsvp <message_ref> --response <accept|decline|tentative>`
 
 ### Attachments
 
@@ -326,6 +327,31 @@ Recommended example:
 }
 ```
 
+### `surface mail rsvp <message_ref> --response <accept|decline|tentative>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "rsvp",
+  "account": "uni",
+  "message_ref": "msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P",
+  "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "response": "tentative",
+  "invite": {
+    "is_invite": true,
+    "rsvp_supported": true,
+    "response_status": "tentative",
+    "available_rsvp_responses": ["accept", "decline", "tentative"]
+  }
+}
+```
+
 ### Error Envelope
 
 Recommended minimum public error shape:
@@ -344,29 +370,32 @@ Recommended minimum public error shape:
 }
 ```
 
-## Deferred Action Metadata
+## Invite Metadata
 
 Do not overload `summary` with action execution semantics.
 
 In particular:
 
 - remove generic fields like `action_hint` from the summary object
-- keep write-action support out of the read-path contract for now
-- when RSVP or invite handling is added, model it explicitly on the message itself
+- keep invite metadata on the message itself
+- keep RSVP response execution as a separate explicit command
 
-Likely later shape:
+Current v1 shape:
 
 ```json
 {
   "invite": {
     "is_invite": true,
     "rsvp_supported": true,
-    "response_status": "needs_response"
+    "response_status": "tentative",
+    "available_rsvp_responses": ["accept", "decline", "tentative"]
   }
 }
 ```
 
-That is clearer than implying RSVP capability through summary fields.
+`response_status` should reflect the latest known RSVP state for the current user. For Outlook,
+this may be inferred from newer response messages in the thread when the original meeting request
+payload is stale.
 
 ## Public Terms
 

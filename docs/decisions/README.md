@@ -32,3 +32,4 @@ Use zero-padded sequential numbers:
 - `0008-outlook-web-via-owa-playwright.md`
 - `0009-clone-outlook-profiles-for-headless-reads.md`
 - `0010-json-first-machine-output.md`
+- `0011-outlook-rsvp-via-createitem.md`
