@@ -102,6 +102,11 @@ Before completing work:
 - update tests or add missing tests
 - ensure public names match the documented contract
 - call out unresolved decisions explicitly
+- prefer small atomic commits over large mixed commits
+- keep each commit scoped to one logical change or ticket slice when practical
+- include the active Linear issue ID in commit messages
+- commit incrementally during longer implementations so GitHub history stays readable and reversible
+- do not batch unrelated refactors, docs, and behavior changes into one commit unless they are inseparable
 
 ## Linear
 
