@@ -29,6 +29,11 @@ surface auth logout school
 surface mail fetch-unread --account work --limit 25
 surface mail search --account work --text invoice --limit 10
 surface mail read msg_01...
+surface mail send --account school --to me@example.com --subject "hello" --body "test"
+surface mail reply msg_01... --body "Thanks"
+surface mail reply-all msg_01... --body "Thanks all"
+surface mail forward msg_01... --to me@example.com --body "FYI"
+surface mail archive msg_01...
 surface mail rsvp msg_01... --response tentative
 
 surface attachment list msg_01...
@@ -66,7 +71,7 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - adapter registry for `gmail-api` and `outlook-web-playwright`
 - donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
-- live Outlook `fetch-unread`, `search`, `read`, `attachment list`, and `rsvp`
+- live Outlook `fetch-unread`, `search`, `read`, `attachment list`, `send`, `reply`, `reply-all`, `forward`, `archive`, and `rsvp`
 - summary backends for `openrouter` and `openclaw`
 
 What is still intentionally incomplete:
@@ -74,7 +79,7 @@ What is still intentionally incomplete:
 - Gmail OAuth login wiring
 - Gmail `search`, `fetch-unread`, `read`, and attachments
 - Outlook attachment download
-- reply / reply-all / forward / send / archive / move
+- move / delete
 - broader automated tests and cache-prune policy
 
 For Outlook auth:
@@ -87,6 +92,15 @@ If Chrome is installed in a non-default location, set:
 
 ```bash
 export SURFACE_CHROME_PATH="/absolute/path/to/Google Chrome"
+```
+
+For live write-path testing, also set:
+
+```bash
+export SURFACE_WRITES_ENABLED=1
+export SURFACE_SEND_MODE=allow_send
+export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
+export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 ```
 
 ## Local State

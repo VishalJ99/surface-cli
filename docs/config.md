@@ -21,7 +21,7 @@ Suggested default path:
 ~/.surface-cli/config.toml
 ```
 
-## Candidate V1 Global Settings
+## V1 Global Settings
 
 ### Storage
 
@@ -71,7 +71,7 @@ Suggested default path:
   Optional list of account names that automation may use for write-path testing.
   Default: empty
 
-## Candidate Environment Variables
+## Environment Variables
 
 - `SURFACE_CACHE_DIR`
 - `SURFACE_DEFAULT_RESULT_LIMIT`
@@ -110,20 +110,21 @@ Example local-only setup:
 
 ```bash
 export SURFACE_WRITES_ENABLED=1
-export SURFACE_SEND_MODE=draft_only
+export SURFACE_SEND_MODE=allow_send
 export SURFACE_TEST_SUBJECT_PREFIX='[surface-test]'
-export SURFACE_TEST_RECIPIENTS='personal@example.com,work@example.com'
-export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni,work'
+export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
+export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 ```
 
-Recommended behavior for future write-path implementation:
+Current write-path behavior:
 
 - if `SURFACE_WRITES_ENABLED` is not set, do not send
-- if `SURFACE_SEND_MODE=draft_only`, only create drafts
+- if `SURFACE_SEND_MODE=draft_only`, reject live send actions because draft creation is not implemented yet
 - if `SURFACE_SEND_MODE=allow_send`, only send when every recipient is on `SURFACE_TEST_RECIPIENTS`
-- reject autonomous sends when the acting account is not on `SURFACE_TEST_ACCOUNT_ALLOWLIST`
+- reject live write actions when the acting account is not on `SURFACE_TEST_ACCOUNT_ALLOWLIST`
+- `archive` requires `SURFACE_WRITES_ENABLED=1` and any configured account allowlist, but it does not check recipients
 
-## Questions To Freeze In M1
+## Questions To Revisit Later
 
 - whether provider timeout should later split by provider/transport
 
@@ -132,3 +133,4 @@ Recommended behavior for future write-path implementation:
 - defining provider-specific account settings here
 - storing provider secrets directly in the config file
 - defining truncation configuration before truncation is implemented
+- defining provider-agnostic draft semantics before the first live send path is stable

@@ -25,11 +25,14 @@ Each provider implementation must support:
 - search
 - fetch-unread
 - read message
+- send
+- reply
+- reply-all
+- forward
+- archive
 - rsvp when meeting invites are supported by the provider
 - list attachments
 - download attachment
-
-Later write actions should also share the same normalized contract.
 
 ## Required Adapter Interface
 
@@ -46,19 +49,24 @@ interface MailProviderAdapter {
 
   search(account: MailAccount, query: SearchQuery): Promise<ThreadResult[]>;
   fetchUnread(account: MailAccount, query: FetchUnreadQuery): Promise<ThreadResult[]>;
-  readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<MessageReadResult>;
+  readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<ReadResultEnvelope>;
+  sendMessage(account: MailAccount, input: SendMessageInput): Promise<SendResultEnvelope>;
+  reply(account: MailAccount, messageRef: string, input: ReplyInput): Promise<SendResultEnvelope>;
+  replyAll(account: MailAccount, messageRef: string, input: ReplyInput): Promise<SendResultEnvelope>;
+  forward(account: MailAccount, messageRef: string, input: ForwardInput): Promise<SendResultEnvelope>;
+  archive(account: MailAccount, messageRef: string): Promise<ArchiveResultEnvelope>;
   rsvp(
     account: MailAccount,
     messageRef: string,
     response: "accept" | "decline" | "tentative",
-  ): Promise<RsvpResult>;
+  ): Promise<RsvpResultEnvelope>;
 
-  listAttachments(account: MailAccount, messageRef: string): Promise<AttachmentMeta[]>;
+  listAttachments(account: MailAccount, messageRef: string): Promise<AttachmentListEnvelope>;
   downloadAttachment(
     account: MailAccount,
     messageRef: string,
     attachmentId: string,
-  ): Promise<AttachmentDownloadResult>;
+  ): Promise<AttachmentDownloadEnvelope>;
 }
 ```
 
@@ -92,6 +100,15 @@ Each account/provider transport should expose capability flags such as:
 - `rsvp`
 
 Capabilities are account/transport-level. Message applicability should be derived from message facts.
+
+## Write Action Rules
+
+- write actions must stay behind explicit local enablement and recipient/account allowlists
+- `archive` is part of the supported v1 action set
+- `delete` is intentionally deferred
+- providers may use transport-specific fallback paths when the primary UI or API surface is not stable,
+  but those fallbacks must be documented in `docs/decisions/`
+- write results should resolve back into local `thread_ref` / `message_ref` values when practical
 
 ## Invite And RSVP Rules
 
@@ -129,5 +146,5 @@ These locators are internal storage concerns and should not be exposed in the pu
 
 ## Still Deferred
 
-- exact interface surface for write actions
 - preferred fixture strategy for browser-driven Outlook flows
+- provider-agnostic draft creation semantics

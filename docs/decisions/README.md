@@ -33,3 +33,6 @@ Use zero-padded sequential numbers:
 - `0009-clone-outlook-profiles-for-headless-reads.md`
 - `0010-json-first-machine-output.md`
 - `0011-outlook-rsvp-via-createitem.md`
+- `0012-v1-supports-archive-not-delete.md`
+- `0013-write-actions-require-explicit-local-allowlists.md`
+- `0014-outlook-write-actions-use-ui-fallbacks.md`

@@ -23,11 +23,16 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface auth status [account]`
 - `surface auth logout <account>`
 
-### Mail Read Path
+### Mail
 
 - `surface mail search ...`
 - `surface mail fetch-unread ...`
 - `surface mail read <message_ref>`
+- `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body>`
+- `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>]`
+- `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>]`
+- `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body>`
+- `surface mail archive <message_ref>`
 - `surface mail rsvp <message_ref> --response <accept|decline|tentative>`
 
 ### Attachments
@@ -352,6 +357,169 @@ Recommended example:
 }
 ```
 
+### `surface mail send --account <account> --to <email> --subject <subject> --body <body>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "send",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "status": "sent",
+  "subject": "[surface-test] PER-93 send probe 1775231001",
+  "recipients": {
+    "to": [
+      {
+        "name": "Jain, Vishal",
+        "email": "sink@example.com"
+      }
+    ],
+    "cc": [
+      {
+        "name": "personal@example.com",
+        "email": "personal@example.com"
+      }
+    ],
+    "bcc": [
+      {
+        "name": "work@example.com",
+        "email": "work@example.com"
+      }
+    ]
+  },
+  "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
+  "message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ",
+  "in_reply_to_message_ref": null
+}
+```
+
+### `surface mail reply <message_ref>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "reply",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "status": "sent",
+  "subject": "Re: [surface-test] PER-93 send probe 1775231001",
+  "recipients": {
+    "to": [
+      {
+        "name": "Jain, Vishal",
+        "email": "sink@example.com"
+      }
+    ],
+    "cc": [],
+    "bcc": []
+  },
+  "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
+  "message_ref": "msg_01KNA0EB3BADKWQVXFYKKK4BXN",
+  "in_reply_to_message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ"
+}
+```
+
+### `surface mail reply-all <message_ref>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "reply-all",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "status": "sent",
+  "subject": "Re: [surface-test] PER-93 send probe 1775231001",
+  "recipients": {
+    "to": [],
+    "cc": [
+      {
+        "name": "personal@example.com",
+        "email": "personal@example.com"
+      }
+    ],
+    "bcc": []
+  },
+  "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
+  "message_ref": "msg_01KNA0SHGG78SP6ZBXKPBHPTV0",
+  "in_reply_to_message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ"
+}
+```
+
+### `surface mail forward <message_ref>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "forward",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "status": "sent",
+  "subject": "Fw: [surface-test] PER-93 send probe 1775231001",
+  "recipients": {
+    "to": [
+      {
+        "name": "personal@example.com",
+        "email": "personal@example.com"
+      }
+    ],
+    "cc": [
+      {
+        "name": "Jain, Vishal",
+        "email": "sink@example.com"
+      }
+    ],
+    "bcc": [
+      {
+        "name": "work@example.com",
+        "email": "work@example.com"
+      }
+    ]
+  },
+  "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
+  "message_ref": "msg_01KNA0TQXP9QCA0T4P48C3NG1G",
+  "in_reply_to_message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ"
+}
+```
+
+### `surface mail archive <message_ref>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "archive",
+  "account": "uni",
+  "message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ",
+  "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "status": "archived"
+}
+```
+
 ### Error Envelope
 
 Recommended minimum public error shape:
@@ -417,10 +585,11 @@ payload is stale.
 - `read --refresh` should exist in v1
 - `summary` should be `null` when no summary was generated
 - truncation should not be enforced in the first implementation slice; `truncated` should remain `false` until truncation logic is added
+- `archive` is supported in v1, but `delete` is not
 
 ## Remaining Open Questions
 
 - exact flag names for truncation and refresh behavior
-- exact shape of write/action commands
+- provider-agnostic draft semantics
 
 See also `docs/m1-checklist.md` for the specific decisions required to clear Milestone 1.
