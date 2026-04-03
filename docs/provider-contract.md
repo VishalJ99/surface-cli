@@ -147,4 +147,4 @@ These locators are internal storage concerns and should not be exposed in the pu
 ## Still Deferred
 
 - preferred fixture strategy for browser-driven Outlook flows
-- provider-agnostic draft creation semantics
+- draft lifecycle commands such as list/update/send-existing-discard

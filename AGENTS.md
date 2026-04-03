@@ -105,7 +105,7 @@ When adding a new CLI capability or extending an existing action, prefer this or
    Extend `src/contracts/`, `src/providers/`, `src/config.ts`, `src/runtime.ts`, and `src/cli.ts`
    in a way that fits the established contract-first architecture rather than inventing a parallel path.
 
-For example, if implementing `draft_only` later:
+For example, if implementing a future draft lifecycle command:
 
 1. add an ADR for draft semantics
 2. add a `docs/cli-contract.md` example showing draft output

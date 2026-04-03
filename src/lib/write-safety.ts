@@ -23,7 +23,7 @@ export function assertWriteAllowed(
   config: SurfaceConfig,
   account: MailAccount,
   recipients: ResolvedWriteRecipients,
-  options: { requireSend?: boolean } = {},
+  options: { disposition?: "send" | "draft" | "non_send" } = {},
 ): { sendMode: SendMode } {
   if (!config.writesEnabled) {
     throw new SurfaceError(
@@ -41,16 +41,17 @@ export function assertWriteAllowed(
     );
   }
 
-  if (options.requireSend === false) {
+  const disposition = options.disposition ?? "send";
+  if (disposition === "non_send") {
     return {
       sendMode: config.sendMode,
     };
   }
 
-  if (config.sendMode !== "allow_send") {
+  if (disposition === "send" && config.sendMode !== "allow_send") {
     throw new SurfaceError(
       "writes_disabled",
-      "Live send is disabled unless SURFACE_SEND_MODE=allow_send. Draft-only mode is not implemented yet.",
+      "Live send is disabled unless SURFACE_SEND_MODE=allow_send. Rerun with --draft or enable live send locally.",
       { account: account.name },
     );
   }

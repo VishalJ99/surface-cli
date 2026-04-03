@@ -153,12 +153,14 @@ export interface SendMessageInput {
   bcc: string[];
   subject: string;
   body: string;
+  draft: boolean;
 }
 
 export interface ReplyInput {
   cc: string[];
   bcc: string[];
   body: string;
+  draft: boolean;
 }
 
 export interface ForwardInput {
@@ -166,6 +168,7 @@ export interface ForwardInput {
   cc: string[];
   bcc: string[];
   body: string;
+  draft: boolean;
 }
 
 export interface SendResultEnvelope {

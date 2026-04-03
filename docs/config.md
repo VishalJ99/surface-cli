@@ -61,9 +61,6 @@ Suggested default path:
 - `send_mode`
   Values: `draft_only`, `allow_send`
   Default: `draft_only`
-- `test_subject_prefix`
-  Prefix applied to autonomous test drafts or sends.
-  Default: `[surface-test]`
 - `test_recipients`
   Local-only allowlist of email addresses that automated test sends may target.
   Default: empty
@@ -84,7 +81,6 @@ Suggested default path:
 - `OPENROUTER_API_KEY`
 - `SURFACE_WRITES_ENABLED`
 - `SURFACE_SEND_MODE`
-- `SURFACE_TEST_SUBJECT_PREFIX`
 - `SURFACE_TEST_RECIPIENTS`
 - `SURFACE_TEST_ACCOUNT_ALLOWLIST`
 
@@ -111,7 +107,6 @@ Example local-only setup:
 ```bash
 export SURFACE_WRITES_ENABLED=1
 export SURFACE_SEND_MODE=allow_send
-export SURFACE_TEST_SUBJECT_PREFIX='[surface-test]'
 export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
 export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 ```
@@ -134,4 +129,4 @@ Current write-path behavior:
 - defining provider-specific account settings here
 - storing provider secrets directly in the config file
 - defining truncation configuration before truncation is implemented
-- defining provider-specific draft persistence details before the first `--draft` implementation lands
+- defining provider-specific draft lifecycle commands before the first `--draft` implementation lands

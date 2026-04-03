@@ -26,7 +26,6 @@ const fileConfigSchema = z.object({
   summarizer_timeout_ms: z.number().int().positive().optional(),
   writes_enabled: z.boolean().optional(),
   send_mode: sendModeSchema.optional(),
-  test_subject_prefix: z.string().min(1).optional(),
   test_recipients: stringListSchema.optional(),
   test_account_allowlist: stringListSchema.optional(),
 });
@@ -41,7 +40,6 @@ export interface SurfaceConfig {
   summarizerTimeoutMs: number;
   writesEnabled: boolean;
   sendMode: "draft_only" | "allow_send";
-  testSubjectPrefix: string;
   testRecipients: string[];
   testAccountAllowlist: string[];
 }
@@ -159,10 +157,6 @@ export function loadConfig(options: ConfigLoadOptions = {}): {
       (process.env.SURFACE_SEND_MODE as SurfaceConfig["sendMode"] | undefined) ??
       fileConfig.send_mode ??
       "draft_only",
-    testSubjectPrefix:
-      process.env.SURFACE_TEST_SUBJECT_PREFIX ??
-      fileConfig.test_subject_prefix ??
-      "[surface-test]",
     testRecipients:
       parseStringList(process.env.SURFACE_TEST_RECIPIENTS) ??
       parseStringList(fileConfig.test_recipients) ??

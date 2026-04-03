@@ -362,6 +362,7 @@ mailCommand
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
   .requiredOption("--subject <subject>", "Message subject")
   .requiredOption("--body <body>", "Message body text")
+  .option("--draft", "Save to drafts instead of sending", false)
   .action(async (options, command: Command) => {
     await runAccountAction(
       command.optsWithGlobals<GlobalOptions>(),
@@ -377,6 +378,7 @@ mailCommand
               bcc: options.bcc ?? [],
               subject: options.subject,
               body: options.body,
+              draft: Boolean(options.draft),
             },
             context,
           ),
@@ -391,6 +393,7 @@ mailCommand
   .requiredOption("--body <body>", "Reply body text")
   .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .option("--draft", "Save to drafts instead of sending", false)
   .action(async (messageRef: string, options, command: Command) => {
     await runMessageAction(
       command.optsWithGlobals<GlobalOptions>(),
@@ -405,6 +408,7 @@ mailCommand
               cc: options.cc ?? [],
               bcc: options.bcc ?? [],
               body: options.body,
+              draft: Boolean(options.draft),
             },
             context,
           ),
@@ -419,6 +423,7 @@ mailCommand
   .requiredOption("--body <body>", "Reply body text")
   .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .option("--draft", "Save to drafts instead of sending", false)
   .action(async (messageRef: string, options, command: Command) => {
     await runMessageAction(
       command.optsWithGlobals<GlobalOptions>(),
@@ -433,6 +438,7 @@ mailCommand
               cc: options.cc ?? [],
               bcc: options.bcc ?? [],
               body: options.body,
+              draft: Boolean(options.draft),
             },
             context,
           ),
@@ -448,6 +454,7 @@ mailCommand
   .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
   .requiredOption("--body <body>", "Forward body text")
+  .option("--draft", "Save to drafts instead of sending", false)
   .action(async (messageRef: string, options, command: Command) => {
     await runMessageAction(
       command.optsWithGlobals<GlobalOptions>(),
@@ -463,6 +470,7 @@ mailCommand
               cc: options.cc ?? [],
               bcc: options.bcc ?? [],
               body: options.body,
+              draft: Boolean(options.draft),
             },
             context,
           ),

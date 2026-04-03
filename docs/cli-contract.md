@@ -623,6 +623,6 @@ payload is stale.
 ## Remaining Open Questions
 
 - exact flag names for truncation and refresh behavior
-- provider-agnostic draft semantics
+- draft lifecycle commands such as list/update/send-existing/discard
 
 See also `docs/m1-checklist.md` for the specific decisions required to clear Milestone 1.

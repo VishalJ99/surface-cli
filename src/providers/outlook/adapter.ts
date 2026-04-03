@@ -387,8 +387,8 @@ function recipientsFromStored(
 
   const parsed = parseStoredMessage(stored);
   return {
-    to: parsed.envelope.to,
-    cc: parsed.envelope.cc,
+    to: parsed.envelope.to.length > 0 ? parsed.envelope.to : fallback.to.map(participantFromEmail),
+    cc: parsed.envelope.cc.length > 0 ? parsed.envelope.cc : fallback.cc.map(participantFromEmail),
     bcc: fallback.bcc.map(participantFromEmail),
   };
 }
@@ -827,6 +827,31 @@ async function sendCurrentCompose(page: Page): Promise<void> {
   await page.waitForTimeout(4_000);
 }
 
+async function saveCurrentComposeDraft(page: Page): Promise<void> {
+  await page.waitForTimeout(6_000);
+  const closeButtons = page.locator('button[aria-label="Close"]:visible');
+  if ((await closeButtons.count()) > 0) {
+    await closeButtons.first().click();
+    await page.waitForTimeout(2_000);
+    return;
+  }
+
+  await page.waitForTimeout(1_000);
+}
+
+async function finalizeCurrentCompose(
+  page: Page,
+  disposition: "send" | "draft",
+): Promise<SendResultEnvelope["status"]> {
+  if (disposition === "draft") {
+    await saveCurrentComposeDraft(page);
+    return "drafted";
+  }
+
+  await sendCurrentCompose(page);
+  return "sent";
+}
+
 async function clickReplyAllAction(page: Page): Promise<void> {
   const primaryButton = page.getByRole("button", { name: /reply all/i }).first();
   if ((await primaryButton.count()) > 0) {
@@ -892,6 +917,7 @@ function latestStoredThreadMessage(
 function buildSendEnvelope(
   account: MailAccount,
   command: SendResultEnvelope["command"],
+  status: SendResultEnvelope["status"],
   subject: string,
   recipients: ComposeRecipients,
   result: { thread_ref: string | null; message_ref: string | null },
@@ -902,7 +928,7 @@ function buildSendEnvelope(
     command,
     account: account.name,
     source: sourceInfo(account),
-    status: "sent",
+    status,
     subject,
     recipients,
     thread_ref: result.thread_ref,
@@ -1293,6 +1319,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       bcc: normalizeEmailList(input.bcc),
       subject: input.subject.trim(),
       body: input.body,
+      draft: input.draft,
     };
 
     if (normalizedInput.to.length === 0) {
@@ -1306,8 +1333,14 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       });
     }
 
-    assertWriteAllowed(context.config, account, collectWriteRecipients(normalizedInput));
+    assertWriteAllowed(
+      context.config,
+      account,
+      collectWriteRecipients(normalizedInput),
+      { disposition: normalizedInput.draft ? "draft" : "send" },
+    );
 
+    let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
     try {
@@ -1323,7 +1356,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await session.page.locator('input[aria-label="Subject"]').fill(normalizedInput.subject);
       await fillComposeBody(session.page, normalizedInput.body);
-      await sendCurrentCompose(session.page);
+      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
       session.cleanup?.();
@@ -1333,6 +1366,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     return buildSendEnvelope(
       account,
       "send",
+      status,
       normalizedInput.subject,
       recipientsFromStored(resolved.stored ?? undefined, normalizedInput),
       resolved,
@@ -1351,10 +1385,17 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
       body: input.body,
+      draft: input.draft,
     };
 
-    assertWriteAllowed(context.config, account, collectWriteRecipients({ to: [], ...normalizedInput }));
+    assertWriteAllowed(
+      context.config,
+      account,
+      collectWriteRecipients({ to: [], ...normalizedInput }),
+      { disposition: normalizedInput.draft ? "draft" : "send" },
+    );
 
+    let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
     try {
@@ -1368,7 +1409,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Cc", normalizedInput.cc);
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
-      await sendCurrentCompose(session.page);
+      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
       session.cleanup?.();
@@ -1380,6 +1421,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     return buildSendEnvelope(
       account,
       "reply",
+      status,
       subject,
       recipientsFromStored(latest.stored ?? undefined, { to: [], cc: normalizedInput.cc, bcc: normalizedInput.bcc }),
       { thread_ref: target.stored.thread_ref, message_ref: latest.message_ref },
@@ -1398,10 +1440,17 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
       body: input.body,
+      draft: input.draft,
     };
 
-    assertWriteAllowed(context.config, account, collectWriteRecipients({ to: [], ...normalizedInput }));
+    assertWriteAllowed(
+      context.config,
+      account,
+      collectWriteRecipients({ to: [], ...normalizedInput }),
+      { disposition: normalizedInput.draft ? "draft" : "send" },
+    );
 
+    let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
     try {
@@ -1415,7 +1464,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Cc", normalizedInput.cc);
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
-      await sendCurrentCompose(session.page);
+      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
       session.cleanup?.();
@@ -1427,6 +1476,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     return buildSendEnvelope(
       account,
       "reply-all",
+      status,
       subject,
       recipientsFromStored(latest.stored ?? undefined, { to: [], cc: normalizedInput.cc, bcc: normalizedInput.bcc }),
       { thread_ref: target.stored.thread_ref, message_ref: latest.message_ref },
@@ -1446,6 +1496,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
       body: input.body,
+      draft: input.draft,
     };
 
     if (normalizedInput.to.length === 0) {
@@ -1456,9 +1507,15 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       });
     }
 
-    assertWriteAllowed(context.config, account, collectWriteRecipients(normalizedInput));
+    assertWriteAllowed(
+      context.config,
+      account,
+      collectWriteRecipients(normalizedInput),
+      { disposition: normalizedInput.draft ? "draft" : "send" },
+    );
 
     let forwardedSubject = target.stored.subject ?? "";
+    let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
     try {
@@ -1474,7 +1531,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
       forwardedSubject = await session.page.locator('input[aria-label="Subject"]').inputValue();
-      await sendCurrentCompose(session.page);
+      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
       session.cleanup?.();
@@ -1484,6 +1541,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     return buildSendEnvelope(
       account,
       "forward",
+      status,
       forwardedSubject,
       recipientsFromStored(resolved.stored ?? undefined, normalizedInput),
       resolved,
@@ -1498,7 +1556,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
   ): Promise<ArchiveResultEnvelope> {
     const target = await resolveMessageActionTarget(account, messageRef, context);
 
-    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { requireSend: false });
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
 
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });

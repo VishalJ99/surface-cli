@@ -37,3 +37,4 @@ Use zero-padded sequential numbers:
 - `0013-write-actions-require-explicit-local-allowlists.md`
 - `0014-outlook-write-actions-use-ui-fallbacks.md`
 - `0015-draft-is-a-flagged-send-disposition.md`
+- `0016-outlook-drafts-use-autosave-and-best-effort-resolution.md`
