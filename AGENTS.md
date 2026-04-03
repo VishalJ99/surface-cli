@@ -93,6 +93,26 @@ Create or update an ADR when changing:
 - provider adapter interface
 - action semantics such as draft-first vs send
 
+## Extending The CLI
+
+When adding a new CLI capability or extending an existing action, prefer this order:
+
+1. Add or update an ADR for the new semantics.
+   Examples: draft semantics, new write-action safety rules, fallback behavior, new result states.
+2. Update `docs/cli-contract.md` with at least one concrete example of the new command output.
+   This should freeze the public JSON shape before implementation spreads across providers.
+3. Implement against the existing provider/config/runtime shape.
+   Extend `src/contracts/`, `src/providers/`, `src/config.ts`, `src/runtime.ts`, and `src/cli.ts`
+   in a way that fits the established contract-first architecture rather than inventing a parallel path.
+
+For example, if implementing `draft_only` later:
+
+1. add an ADR for draft semantics
+2. add a `docs/cli-contract.md` example showing draft output
+3. implement the behavior against the existing provider/config/runtime shape
+
+Do not skip directly to provider code for a new action if the draft/send/archive semantics are still ambiguous.
+
 ## Tidy Up Before Finishing
 
 Before completing work:
