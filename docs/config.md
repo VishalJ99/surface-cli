@@ -27,31 +27,35 @@ Suggested default path:
 
 - `cache_dir`
   Root directory for SQLite, cached bodies, attachments, and auth artifacts.
+  Default: `~/.surface-cli`
 
 ### Fetch And Cache
 
-- `max_cached_body_bytes`
-  Maximum normalized body bytes stored during `search` and `fetch-unread`.
 - `default_result_limit`
   Default limit for `search` and `fetch-unread` when no explicit limit is passed.
+  Default: `50`
 - `provider_timeout_ms`
   Timeout budget for provider fetch operations.
+  Default: `30000`
 
 ### Summarization
 
 - `summarizer_backend`
-  Suggested values: `openrouter`, `openclaw`, `none`
+  Values: `openrouter`, `openclaw`, `none`
+  Default: `none`
 - `summarizer_model`
   Default model used for summarization when a backend supports model selection.
+  Default: `openai/gpt-4o-mini`
 - `summary_input_max_bytes`
   Maximum bytes of normalized body content sent into summarization.
+  Default: `16384`
 - `summarizer_timeout_ms`
   Timeout budget for summarization requests.
+  Default: `20000`
 
 ## Candidate Environment Variables
 
 - `SURFACE_CACHE_DIR`
-- `SURFACE_MAX_CACHED_BODY_BYTES`
 - `SURFACE_DEFAULT_RESULT_LIMIT`
 - `SURFACE_PROVIDER_TIMEOUT_MS`
 - `SURFACE_SUMMARIZER_BACKEND`
@@ -64,12 +68,10 @@ environment variables or provider/account-specific auth storage.
 
 ## Questions To Freeze In M1
 
-- whether `summarizer_backend` should support `auto` in v1 or stay explicit
-- whether truncation should be measured in bytes only
-- whether `cache_dir` should default to `~/.surface-cli`
-- whether provider timeout should be one global setting or split by provider/transport later
+- whether provider timeout should later split by provider/transport
 
 ## Non-Goals
 
 - defining provider-specific account settings here
 - storing provider secrets directly in the config file
+- defining truncation configuration before truncation is implemented

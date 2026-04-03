@@ -30,6 +30,34 @@ Each provider implementation must support:
 
 Later write actions should also share the same normalized contract.
 
+## Required Adapter Interface
+
+Each provider transport should implement a shared adapter interface equivalent to:
+
+```ts
+interface MailProviderAdapter {
+  readonly provider: "gmail" | "outlook";
+  readonly transport: string;
+
+  login(account: MailAccount): Promise<void>;
+  logout(account: MailAccount): Promise<void>;
+  authStatus(account: MailAccount): Promise<AuthStatus>;
+
+  search(account: MailAccount, query: SearchQuery): Promise<ThreadResult[]>;
+  fetchUnread(account: MailAccount, query: FetchUnreadQuery): Promise<ThreadResult[]>;
+  readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<MessageReadResult>;
+
+  listAttachments(account: MailAccount, messageRef: string): Promise<AttachmentMeta[]>;
+  downloadAttachment(
+    account: MailAccount,
+    messageRef: string,
+    attachmentId: string,
+  ): Promise<AttachmentDownloadResult>;
+}
+```
+
+The adapter returns normalized mail-domain objects, not provider-native payloads.
+
 ## Normalization Rules
 
 Provider-specific payloads must be mapped into:
@@ -69,8 +97,21 @@ Each provider should pass the same contract tests for:
 - attachment metadata shape
 - machine-readable error codes
 
-## Open Questions
+## Provider Locator Requirements
+
+Each provider must persist enough locator data for later resolution from local refs.
+
+At minimum:
+
+- provider thread identifier
+- provider message identifier
+- account identifier
+- mailbox or folder hint when useful
+- any transport-specific locator required for subsequent read/download/action calls
+
+These locators are internal storage concerns and should not be exposed in the public stdout JSON contract.
+
+## Still Deferred
 
 - exact interface surface for write actions
 - preferred fixture strategy for browser-driven Outlook flows
-- exact provider locator format stored in SQLite

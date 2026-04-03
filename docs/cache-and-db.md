@@ -32,7 +32,7 @@ SQLite should store enough information to resolve refs and power later commands:
 ## Cache Behavior
 
 - `search` and `fetch-unread` should upsert results into SQLite.
-- They should also cache normalized non-summary body content up to a truncation limit.
+- In the first implementation slice, they should cache full normalized non-summary body content without truncation.
 - `read <message_ref>` should check local state first.
 - On cache miss, truncation, or refresh, `read` should fetch live and update local state.
 
@@ -40,20 +40,34 @@ SQLite should store enough information to resolve refs and power later commands:
 
 ```text
 ~/.surface-cli/
+  config.toml
   state.db
+  downloads/
+    <account_id>/
+      <message_ref>/
+        <attachment_id>__<filename>
   cache/
-    accounts/
-      <account_id>/
-        messages/
-          <message_ref>/
-            body.txt
-            meta.json
-        attachments/
+    <account_id>/
+      messages/
+        <message_ref>/
+          body.txt
+          meta.json
   auth/
     <account_id>/
 ```
 
-SQLite is the lookup source of truth. File cache is the large-body/attachment storage.
+SQLite is the lookup source of truth.
+
+Use the directories this way:
+
+- `auth/`
+  provider credentials or browser profiles
+- `cache/`
+  disposable local cache such as normalized message bodies
+- `downloads/`
+  explicit user-requested attachment downloads
+
+`downloads/` should not be treated as disposable cache.
 
 ## Cache Clearing
 
@@ -66,12 +80,13 @@ Expected command model:
 - `surface cache clear --all`
 
 Auth data should not be deleted by cache commands.
+Downloaded attachments should also not be deleted by cache commands unless explicitly documented later.
 
 ## Open Questions
 
 - exact SQLite schema and migration strategy
 - whether summaries belong only in SQLite, only on disk, or both
-- truncation settings and defaults
+- truncation settings and defaults after truncation is introduced
 - attachment retention policy
 - how to represent stale vs fresh mailbox state
 

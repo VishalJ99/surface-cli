@@ -25,3 +25,4 @@ Use zero-padded sequential numbers:
 - `0001-thread-first-result-model.md`
 - `0002-use-sqlite-for-local-state.md`
 - `0003-fetch-unread-command-name.md`
+- `0004-use-opaque-global-refs.md`
