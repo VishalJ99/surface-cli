@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { MailAccount } from "../../contracts/account.js";
@@ -12,6 +12,7 @@ import type {
 } from "../../contracts/mail.js";
 import { notImplemented } from "../../lib/errors.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
+import { launchOutlookSession, probeOutlookAuth, promptForOutlookLogin } from "./session.js";
 
 function outlookProfileDir(context: ProviderContext): string {
   return join(context.accountPaths.authDir, "profile");
@@ -21,18 +22,26 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
   readonly provider = "outlook" as const;
   readonly transport = "outlook-web-playwright";
 
-  async login(account: MailAccount): Promise<AuthStatus> {
-    notImplemented(
-      "Outlook Playwright login is not wired yet. The next step is to port the persistent-profile bootstrap into this adapter.",
-      account.name,
-    );
+  async login(account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: false });
+
+    try {
+      await session.page.goto("https://outlook.office.com/mail/", { waitUntil: "domcontentloaded" });
+      await promptForOutlookLogin(profileDir);
+      return await probeOutlookAuth(session.page, { timeoutMs: context.config.providerTimeoutMs });
+    } finally {
+      await session.context.close();
+    }
   }
 
-  async logout(account: MailAccount): Promise<AuthStatus> {
-    notImplemented(
-      "Outlook logout is not wired yet. For now, remove the profile under ~/.surface-cli/auth/<account_id>/profile manually.",
-      account.name,
-    );
+  async logout(_account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
+    const profileDir = outlookProfileDir(context);
+    rmSync(profileDir, { recursive: true, force: true });
+    return {
+      status: "unauthenticated",
+      detail: "Removed the Outlook persistent profile directory for this account.",
+    };
   }
 
   async authStatus(_account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
@@ -42,9 +51,25 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     }
 
     const profileEntries = readdirSync(profileDir);
-    return profileEntries.length > 0
-      ? { status: "authenticated", detail: "Persistent Outlook browser profile is present." }
-      : { status: "unauthenticated", detail: "Outlook profile directory exists but is empty." };
+    if (profileEntries.length === 0) {
+      return { status: "unauthenticated", detail: "Outlook profile directory exists but is empty." };
+    }
+
+    let session;
+    try {
+      session = await launchOutlookSession(profileDir, { headless: true });
+      return await probeOutlookAuth(session.page, { timeoutMs: context.config.providerTimeoutMs });
+    } catch (error) {
+      return {
+        status: "unknown",
+        detail:
+          error instanceof Error
+            ? `Could not probe Outlook auth state: ${error.message}`
+            : "Could not probe Outlook auth state.",
+      };
+    } finally {
+      await session?.context.close();
+    }
   }
 
   async search(account: MailAccount, _query: SearchQuery): Promise<NormalizedThreadRecord[]> {

@@ -64,14 +64,26 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - SQLite-backed local account state
 - adapter registry for `gmail-api` and `outlook-web-playwright`
 - donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
+- Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
 
 What is still intentionally incomplete:
 
 - Gmail OAuth login wiring
 - Gmail `search`, `fetch-unread`, `read`, and attachments
-- Outlook Playwright login wiring
 - Outlook `search`, `fetch-unread`, `read`, and attachments
 - summarizer backend execution
+
+For Outlook auth:
+
+- `surface auth login <account>` opens Chrome against the account profile directory
+- `surface auth status [account]` probes Outlook headlessly and reports whether the profile lands in the mailbox or a sign-in flow
+- `surface auth logout <account>` clears the stored Outlook profile for that account
+
+If Chrome is installed in a non-default location, set:
+
+```bash
+export SURFACE_CHROME_PATH="/absolute/path/to/Google Chrome"
+```
 
 ## Local State
 
