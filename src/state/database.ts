@@ -823,6 +823,38 @@ export class SurfaceDatabase {
     }
   }
 
+  listMessageRefsForThread(threadRef: string): string[] {
+    return (
+      this.connection
+        .prepare(
+          `
+          SELECT message_ref
+          FROM thread_messages
+          WHERE thread_ref = ?
+          ORDER BY position ASC
+          `,
+        )
+        .all(threadRef) as Array<{ message_ref: string }>
+    ).map((row) => row.message_ref);
+  }
+
+  markThreadArchived(threadRef: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE threads
+        SET mailbox = 'archive',
+            labels_json = '["archive"]',
+            last_synced_at = @last_synced_at
+        WHERE thread_ref = @thread_ref
+        `,
+      )
+      .run({
+        thread_ref: threadRef,
+        last_synced_at: nowIsoUtc(),
+      });
+  }
+
   findMessageByRef(messageRef: string): {
     message_ref: string;
     thread_ref: string;

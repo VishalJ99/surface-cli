@@ -34,6 +34,7 @@ export interface ThreadSummary {
 }
 
 export type RsvpResponse = "accept" | "decline" | "tentative";
+export type SendMode = "draft_only" | "allow_send";
 
 export interface MessageEnvelope {
   subject?: string;
@@ -138,6 +139,56 @@ export interface AttachmentDownloadEnvelope {
   attachment: AttachmentMeta & {
     saved_to: string;
   };
+}
+
+export interface ComposeRecipients {
+  to: MessageParticipant[];
+  cc: MessageParticipant[];
+  bcc: MessageParticipant[];
+}
+
+export interface SendMessageInput {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+}
+
+export interface ReplyInput {
+  cc: string[];
+  bcc: string[];
+  body: string;
+}
+
+export interface ForwardInput {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  body: string;
+}
+
+export interface SendResultEnvelope {
+  schema_version: "1";
+  command: "send" | "reply" | "reply-all" | "forward";
+  account: string;
+  source: SourceInfo;
+  status: "sent" | "drafted";
+  subject: string;
+  recipients: ComposeRecipients;
+  thread_ref: string | null;
+  message_ref: string | null;
+  in_reply_to_message_ref: string | null;
+}
+
+export interface ArchiveResultEnvelope {
+  schema_version: "1";
+  command: "archive";
+  account: string;
+  message_ref: string;
+  thread_ref: string;
+  source: SourceInfo;
+  status: "archived";
 }
 
 export interface RsvpResultEnvelope {

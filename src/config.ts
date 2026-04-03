@@ -6,6 +6,8 @@ import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 
 const summarizerBackendSchema = z.enum(["openrouter", "openclaw", "none"]);
+const sendModeSchema = z.enum(["draft_only", "allow_send"]);
+const stringListSchema = z.union([z.string(), z.array(z.string())]);
 
 const fileConfigSchema = z.object({
   cache_dir: z.string().optional(),
@@ -22,6 +24,11 @@ const fileConfigSchema = z.object({
   summarizer_backend: summarizerBackendSchema.optional(),
   summarizer_model: z.string().min(1).optional(),
   summarizer_timeout_ms: z.number().int().positive().optional(),
+  writes_enabled: z.boolean().optional(),
+  send_mode: sendModeSchema.optional(),
+  test_subject_prefix: z.string().min(1).optional(),
+  test_recipients: stringListSchema.optional(),
+  test_account_allowlist: stringListSchema.optional(),
 });
 
 export interface SurfaceConfig {
@@ -32,6 +39,11 @@ export interface SurfaceConfig {
   summarizerModel: string;
   summaryInputMaxBytes: number;
   summarizerTimeoutMs: number;
+  writesEnabled: boolean;
+  sendMode: "draft_only" | "allow_send";
+  testSubjectPrefix: string;
+  testRecipients: string[];
+  testAccountAllowlist: string[];
 }
 
 export interface ConfigLoadOptions {
@@ -67,6 +79,34 @@ function envInt(name: string): number | undefined {
     throw new Error(`Environment variable ${name} must be a positive integer.`);
   }
   return parsed;
+}
+
+function envBoolean(name: string): boolean | undefined {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue.trim() === "") {
+    return undefined;
+  }
+  const normalized = rawValue.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Environment variable ${name} must be a boolean.`);
+}
+
+function parseStringList(value: string | string[] | undefined): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 export function loadConfig(options: ConfigLoadOptions = {}): {
@@ -111,6 +151,26 @@ export function loadConfig(options: ConfigLoadOptions = {}): {
       fileConfig.summarizer?.timeout_ms ??
       fileConfig.summarizer_timeout_ms ??
       20_000,
+    writesEnabled:
+      envBoolean("SURFACE_WRITES_ENABLED") ??
+      fileConfig.writes_enabled ??
+      false,
+    sendMode:
+      (process.env.SURFACE_SEND_MODE as SurfaceConfig["sendMode"] | undefined) ??
+      fileConfig.send_mode ??
+      "draft_only",
+    testSubjectPrefix:
+      process.env.SURFACE_TEST_SUBJECT_PREFIX ??
+      fileConfig.test_subject_prefix ??
+      "[surface-test]",
+    testRecipients:
+      parseStringList(process.env.SURFACE_TEST_RECIPIENTS) ??
+      parseStringList(fileConfig.test_recipients) ??
+      [],
+    testAccountAllowlist:
+      parseStringList(process.env.SURFACE_TEST_ACCOUNT_ALLOWLIST) ??
+      parseStringList(fileConfig.test_account_allowlist) ??
+      [],
   };
 
   return { config, configPath };

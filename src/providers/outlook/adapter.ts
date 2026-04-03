@@ -1,10 +1,15 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { Page } from "playwright-core";
+
 import type { MailAccount } from "../../contracts/account.js";
 import type {
+  ArchiveResultEnvelope,
   AttachmentDownloadEnvelope,
   AttachmentListEnvelope,
+  ComposeRecipients,
+  ForwardInput,
   MessageEnvelope,
   MessageInvite,
   MessageParticipant,
@@ -13,12 +18,16 @@ import type {
   FetchUnreadQuery,
   NormalizedThreadRecord,
   ReadResultEnvelope,
+  ReplyInput,
   RsvpResponse,
   RsvpResultEnvelope,
+  SendMessageInput,
+  SendResultEnvelope,
   SearchQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
 import { SurfaceError, notImplemented } from "../../lib/errors.js";
+import { assertWriteAllowed, collectWriteRecipients } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeThread } from "../../summarizer.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
@@ -30,6 +39,7 @@ import {
   collectSearchConversationIds,
   collectUnreadConversationIds,
   fetchConversationBundle,
+  waitForOutlookMailboxReady,
   type OutlookConversationItem,
   type OutlookThreadBundle,
 } from "./extract.js";
@@ -352,6 +362,56 @@ function parseOutlookMessageLocator(locatorJson: string): OutlookMessageLocator 
   };
 }
 
+function participantFromEmail(email: string): MessageParticipant {
+  return {
+    name: email,
+    email,
+  };
+}
+
+function recipientsFromInput(input: { to: string[]; cc: string[]; bcc: string[] }): ComposeRecipients {
+  return {
+    to: input.to.map(participantFromEmail),
+    cc: input.cc.map(participantFromEmail),
+    bcc: input.bcc.map(participantFromEmail),
+  };
+}
+
+function recipientsFromStored(
+  stored: StoredMessageRecord | undefined,
+  fallback: { to: string[]; cc: string[]; bcc: string[] },
+): ComposeRecipients {
+  if (!stored) {
+    return recipientsFromInput(fallback);
+  }
+
+  const parsed = parseStoredMessage(stored);
+  return {
+    to: parsed.envelope.to,
+    cc: parsed.envelope.cc,
+    bcc: fallback.bcc.map(participantFromEmail),
+  };
+}
+
+function normalizeEmailList(values: string[]): string[] {
+  const deduped = new Set<string>();
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    deduped.add(normalized);
+  }
+  return [...deduped];
+}
+
+function sourceInfo(account: MailAccount) {
+  return {
+    provider: account.provider,
+    transport: account.transport,
+  } as const;
+}
+
 async function persistThreads(
   account: MailAccount,
   context: ProviderContext,
@@ -646,6 +706,227 @@ async function resolveRsvpLocator(
   return { locator, stored };
 }
 
+async function resolveMessageActionTarget(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<{ locator: OutlookMessageLocator; stored: StoredMessageRecord }> {
+  let stored = context.db.getStoredMessage(messageRef);
+  if (!stored) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  let locatorRow = context.db.findProviderLocator("message", messageRef);
+  if (!locatorRow) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    locatorRow = context.db.findProviderLocator("message", messageRef);
+  }
+
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+      threadRef: stored.thread_ref,
+    });
+  }
+
+  let locator = parseOutlookMessageLocator(locatorRow.locator_json);
+  if (!locator.conversation_id) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    locatorRow = context.db.findProviderLocator("message", messageRef);
+    if (!locatorRow) {
+      throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+        account: account.name,
+        messageRef,
+        threadRef: stored.thread_ref,
+      });
+    }
+    locator = parseOutlookMessageLocator(locatorRow.locator_json);
+  }
+
+  if (!locator.conversation_id) {
+    throw new SurfaceError(
+      "unsupported",
+      `Message '${messageRef}' does not expose enough Outlook metadata for mail actions.`,
+      {
+        account: account.name,
+        messageRef,
+        threadRef: stored.thread_ref,
+      },
+    );
+  }
+
+  return { locator, stored };
+}
+
+async function openConversationForAction(
+  page: Page,
+  locator: OutlookMessageLocator,
+  queryText: string,
+): Promise<void> {
+  await page.goto("https://outlook.office.com/mail/", {
+    waitUntil: "domcontentloaded",
+    timeout: 30_000,
+  });
+  await waitForOutlookMailboxReady(page, 30_000);
+  await applySearchQuery(page, queryText);
+
+  let row = page.locator(`[role="option"][data-convid="${locator.conversation_id}"]`).first();
+  if ((await row.count()) === 0) {
+    row = page.locator('[role="option"]').filter({ hasText: queryText }).first();
+  }
+
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+  await page.waitForTimeout(1_500);
+}
+
+async function ensureRecipientField(page: Page, label: "To" | "Cc" | "Bcc") {
+  let field = page.locator(`[aria-label="${label}"][contenteditable="true"]`).first();
+  if ((await field.count()) > 0) {
+    return field;
+  }
+
+  const toggle = page.getByText(label, { exact: true }).last();
+  await toggle.click();
+  await page.waitForTimeout(400);
+  field = page.locator(`[aria-label="${label}"][contenteditable="true"]`).first();
+  await field.waitFor({ timeout: 10_000 });
+  return field;
+}
+
+async function fillRecipientField(page: Page, label: "To" | "Cc" | "Bcc", recipients: string[]): Promise<void> {
+  const normalizedRecipients = normalizeEmailList(recipients);
+  if (normalizedRecipients.length === 0) {
+    return;
+  }
+
+  const field = await ensureRecipientField(page, label);
+  for (const recipient of normalizedRecipients) {
+    await field.click();
+    await field.type(recipient);
+    await field.press("Enter");
+    await page.waitForTimeout(150);
+  }
+}
+
+async function fillComposeBody(page: Page, body: string): Promise<void> {
+  const editor = page.locator('[role="textbox"][aria-label="Message body"]').first();
+  await editor.waitFor({ timeout: 15_000 });
+  await editor.click();
+  if (body.trim()) {
+    await editor.type(body);
+  }
+}
+
+async function sendCurrentCompose(page: Page): Promise<void> {
+  await page.locator('button[aria-label="Send"]').first().click();
+  await page.waitForTimeout(4_000);
+}
+
+async function clickReplyAllAction(page: Page): Promise<void> {
+  const primaryButton = page.getByRole("button", { name: /reply all/i }).first();
+  if ((await primaryButton.count()) > 0) {
+    await primaryButton.click();
+    return;
+  }
+
+  await page.locator('button[aria-label="More items"]').last().click();
+  await page.waitForTimeout(600);
+  const fallback = page.getByRole("menuitem", { name: /reply all/i }).first();
+  await fallback.waitFor({ timeout: 10_000 });
+  await fallback.click({ force: true });
+  await page.waitForTimeout(800);
+  const inlineActivator = page.locator('div[aria-label="Reply all"]').last();
+  if ((await inlineActivator.count()) > 0) {
+    await inlineActivator.click({ force: true });
+  }
+}
+
+async function findResolvedSearchTarget(
+  account: MailAccount,
+  subject: string,
+  context: ProviderContext,
+): Promise<{ thread_ref: string | null; message_ref: string | null; stored: StoredMessageRecord | null }> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const threads = await fetchOutlookThreads(account, context, {
+      kind: "search",
+      queryText: subject,
+      limit: 5,
+      summarize: false,
+    });
+    const thread = threads.find((candidate) => candidate.envelope.subject.includes(subject)) ?? threads[0];
+    if (thread) {
+      const messageRef = thread.messages[0]?.message_ref ?? null;
+      return {
+        thread_ref: thread.thread_ref,
+        message_ref: messageRef,
+        stored: messageRef ? context.db.getStoredMessage(messageRef) ?? null : null,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+
+  return {
+    thread_ref: null,
+    message_ref: null,
+    stored: null,
+  };
+}
+
+function latestStoredThreadMessage(
+  threadRef: string,
+  context: ProviderContext,
+): { message_ref: string | null; stored: StoredMessageRecord | null } {
+  const messageRef = context.db.listMessageRefsForThread(threadRef)[0] ?? null;
+  return {
+    message_ref: messageRef,
+    stored: messageRef ? context.db.getStoredMessage(messageRef) ?? null : null,
+  };
+}
+
+function buildSendEnvelope(
+  account: MailAccount,
+  command: SendResultEnvelope["command"],
+  subject: string,
+  recipients: ComposeRecipients,
+  result: { thread_ref: string | null; message_ref: string | null },
+  inReplyToMessageRef: string | null,
+): SendResultEnvelope {
+  return {
+    schema_version: "1",
+    command,
+    account: account.name,
+    source: sourceInfo(account),
+    status: "sent",
+    subject,
+    recipients,
+    thread_ref: result.thread_ref,
+    message_ref: result.message_ref,
+    in_reply_to_message_ref: inReplyToMessageRef,
+  };
+}
+
+function buildArchiveEnvelope(
+  account: MailAccount,
+  messageRef: string,
+  threadRef: string,
+): ArchiveResultEnvelope {
+  return {
+    schema_version: "1",
+    command: "archive",
+    account: account.name,
+    message_ref: messageRef,
+    thread_ref: threadRef,
+    source: sourceInfo(account),
+    status: "archived",
+  };
+}
+
 function buildCreateItemHeaders(headers: Record<string, string>): Record<string, string> {
   return {
     ...headers,
@@ -791,7 +1072,7 @@ function buildReadEnvelope(
 async function fetchOutlookThreads(
   account: MailAccount,
   context: ProviderContext,
-  options: { kind: "search" | "fetch-unread"; queryText?: string; limit: number },
+  options: { kind: "search" | "fetch-unread"; queryText?: string; limit: number; summarize?: boolean },
 ): Promise<NormalizedThreadRecord[]> {
   const profileDir = outlookProfileDir(context);
   if (!existsSync(profileDir)) {
@@ -822,7 +1103,8 @@ async function fetchOutlookThreads(
     }
 
     const normalized = bundles.map((bundle) => normalizeThread(bundle));
-    const summarized = await maybeSummarizeThreads(normalized, context);
+    const summarized =
+      options.summarize === false ? normalized : await maybeSummarizeThreads(normalized, context);
     return await persistThreads(account, context, summarized);
   } finally {
     await session.context.close();
@@ -998,6 +1280,253 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     const refreshed = await refreshStoredMessage(account, messageRef, context);
     const parsed = parseStoredMessage(refreshed);
     return buildRsvpEnvelope(account, messageRef, stored.thread_ref, response, parsed.invite);
+  }
+
+  async sendMessage(
+    account: MailAccount,
+    input: SendMessageInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const normalizedInput = {
+      to: normalizeEmailList(input.to),
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+      subject: input.subject.trim(),
+      body: input.body,
+    };
+
+    if (normalizedInput.to.length === 0) {
+      throw new SurfaceError("invalid_argument", "Send requires at least one --to recipient.", {
+        account: account.name,
+      });
+    }
+    if (!normalizedInput.subject) {
+      throw new SurfaceError("invalid_argument", "Send requires a non-empty --subject.", {
+        account: account.name,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, collectWriteRecipients(normalizedInput));
+
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+    try {
+      await session.page.goto("https://outlook.office.com/mail/", {
+        waitUntil: "domcontentloaded",
+        timeout: context.config.providerTimeoutMs,
+      });
+      await waitForOutlookMailboxReady(session.page, context.config.providerTimeoutMs);
+      await session.page.locator('button[aria-label="New email"]').first().click();
+      await session.page.waitForTimeout(1_500);
+      await fillRecipientField(session.page, "To", normalizedInput.to);
+      await fillRecipientField(session.page, "Cc", normalizedInput.cc);
+      await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
+      await session.page.locator('input[aria-label="Subject"]').fill(normalizedInput.subject);
+      await fillComposeBody(session.page, normalizedInput.body);
+      await sendCurrentCompose(session.page);
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    const resolved = await findResolvedSearchTarget(account, normalizedInput.subject, context);
+    return buildSendEnvelope(
+      account,
+      "send",
+      normalizedInput.subject,
+      recipientsFromStored(resolved.stored ?? undefined, normalizedInput),
+      resolved,
+      null,
+    );
+  }
+
+  async reply(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const target = await resolveMessageActionTarget(account, messageRef, context);
+    const normalizedInput = {
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+      body: input.body,
+    };
+
+    assertWriteAllowed(context.config, account, collectWriteRecipients({ to: [], ...normalizedInput }));
+
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+    try {
+      await openConversationForAction(
+        session.page,
+        target.locator,
+        target.stored.subject ?? target.locator.internet_message_id ?? messageRef,
+      );
+      await session.page.locator('button[aria-label="Reply"]').first().click();
+      await session.page.waitForTimeout(1_500);
+      await fillRecipientField(session.page, "Cc", normalizedInput.cc);
+      await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
+      await fillComposeBody(session.page, normalizedInput.body);
+      await sendCurrentCompose(session.page);
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    await refreshOutlookConversation(account, target.locator.conversation_id, context);
+    const latest = latestStoredThreadMessage(target.stored.thread_ref, context);
+    const subject = latest.stored?.subject ?? target.stored.subject ?? "";
+    return buildSendEnvelope(
+      account,
+      "reply",
+      subject,
+      recipientsFromStored(latest.stored ?? undefined, { to: [], cc: normalizedInput.cc, bcc: normalizedInput.bcc }),
+      { thread_ref: target.stored.thread_ref, message_ref: latest.message_ref },
+      messageRef,
+    );
+  }
+
+  async replyAll(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const target = await resolveMessageActionTarget(account, messageRef, context);
+    const normalizedInput = {
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+      body: input.body,
+    };
+
+    assertWriteAllowed(context.config, account, collectWriteRecipients({ to: [], ...normalizedInput }));
+
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+    try {
+      await openConversationForAction(
+        session.page,
+        target.locator,
+        target.stored.subject ?? target.locator.internet_message_id ?? messageRef,
+      );
+      await clickReplyAllAction(session.page);
+      await session.page.waitForTimeout(1_500);
+      await fillRecipientField(session.page, "Cc", normalizedInput.cc);
+      await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
+      await fillComposeBody(session.page, normalizedInput.body);
+      await sendCurrentCompose(session.page);
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    await refreshOutlookConversation(account, target.locator.conversation_id, context);
+    const latest = latestStoredThreadMessage(target.stored.thread_ref, context);
+    const subject = latest.stored?.subject ?? target.stored.subject ?? "";
+    return buildSendEnvelope(
+      account,
+      "reply-all",
+      subject,
+      recipientsFromStored(latest.stored ?? undefined, { to: [], cc: normalizedInput.cc, bcc: normalizedInput.bcc }),
+      { thread_ref: target.stored.thread_ref, message_ref: latest.message_ref },
+      messageRef,
+    );
+  }
+
+  async forward(
+    account: MailAccount,
+    messageRef: string,
+    input: ForwardInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const target = await resolveMessageActionTarget(account, messageRef, context);
+    const normalizedInput = {
+      to: normalizeEmailList(input.to),
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+      body: input.body,
+    };
+
+    if (normalizedInput.to.length === 0) {
+      throw new SurfaceError("invalid_argument", "Forward requires at least one --to recipient.", {
+        account: account.name,
+        messageRef,
+        threadRef: target.stored.thread_ref,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, collectWriteRecipients(normalizedInput));
+
+    let forwardedSubject = target.stored.subject ?? "";
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+    try {
+      await openConversationForAction(
+        session.page,
+        target.locator,
+        target.stored.subject ?? target.locator.internet_message_id ?? messageRef,
+      );
+      await session.page.locator('button[aria-label="Forward"]').first().click();
+      await session.page.waitForTimeout(1_500);
+      await fillRecipientField(session.page, "To", normalizedInput.to);
+      await fillRecipientField(session.page, "Cc", normalizedInput.cc);
+      await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
+      await fillComposeBody(session.page, normalizedInput.body);
+      forwardedSubject = await session.page.locator('input[aria-label="Subject"]').inputValue();
+      await sendCurrentCompose(session.page);
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    const resolved = await findResolvedSearchTarget(account, forwardedSubject, context);
+    return buildSendEnvelope(
+      account,
+      "forward",
+      forwardedSubject,
+      recipientsFromStored(resolved.stored ?? undefined, normalizedInput),
+      resolved,
+      messageRef,
+    );
+  }
+
+  async archive(
+    account: MailAccount,
+    messageRef: string,
+    context: ProviderContext,
+  ): Promise<ArchiveResultEnvelope> {
+    const target = await resolveMessageActionTarget(account, messageRef, context);
+
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { requireSend: false });
+
+    const profileDir = outlookProfileDir(context);
+    const session = await launchOutlookSession(profileDir, { headless: true });
+    try {
+      await session.page.goto("https://outlook.office.com/mail/", {
+        waitUntil: "domcontentloaded",
+        timeout: context.config.providerTimeoutMs,
+      });
+      await waitForOutlookMailboxReady(session.page, context.config.providerTimeoutMs);
+      let row = session.page.locator(`[role="option"][data-convid="${target.locator.conversation_id}"]`).first();
+      if ((await row.count()) === 0) {
+        row = session.page
+          .locator('[role="option"]')
+          .filter({ hasText: target.stored.subject ?? target.locator.internet_message_id ?? messageRef })
+          .first();
+      }
+      await row.waitFor({ timeout: 15_000 });
+      await row.click();
+      await session.page.waitForTimeout(1_500);
+      await session.page.locator('button[aria-label="Archive"]').first().click();
+      await session.page.waitForTimeout(2_500);
+    } finally {
+      await session.context.close();
+      session.cleanup?.();
+    }
+
+    context.db.markThreadArchived(target.stored.thread_ref);
+    return buildArchiveEnvelope(account, messageRef, target.stored.thread_ref);
   }
 
   async downloadAttachment(account: MailAccount): Promise<AttachmentDownloadEnvelope> {

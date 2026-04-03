@@ -23,6 +23,10 @@ function positiveInt(value: string): number {
   return parsed;
 }
 
+function collectStringOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
 function directorySizeBytes(rootPath: string): number {
   if (!existsSync(rootPath)) {
     return 0;
@@ -346,6 +350,137 @@ mailCommand
       async (context) => {
         const adapter = resolveProviderAdapter(context.account);
         writeJson(await adapter.rsvp(context.account, messageRef, response as "accept" | "decline" | "tentative", context));
+      },
+    );
+  });
+
+mailCommand
+  .command("send")
+  .requiredOption("--account <account>", "Logical account name")
+  .requiredOption("--to <email>", "Recipient email address", collectStringOption, [])
+  .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
+  .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .requiredOption("--subject <subject>", "Message subject")
+  .requiredOption("--body <body>", "Message body text")
+  .action(async (options, command: Command) => {
+    await runAccountAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      options.account,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(
+          await adapter.sendMessage(
+            context.account,
+            {
+              to: options.to,
+              cc: options.cc ?? [],
+              bcc: options.bcc ?? [],
+              subject: options.subject,
+              body: options.body,
+            },
+            context,
+          ),
+        );
+      },
+    );
+  });
+
+mailCommand
+  .command("reply")
+  .argument("<message_ref>", "Stable message ref")
+  .requiredOption("--body <body>", "Reply body text")
+  .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
+  .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .action(async (messageRef: string, options, command: Command) => {
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(
+          await adapter.reply(
+            context.account,
+            messageRef,
+            {
+              cc: options.cc ?? [],
+              bcc: options.bcc ?? [],
+              body: options.body,
+            },
+            context,
+          ),
+        );
+      },
+    );
+  });
+
+mailCommand
+  .command("reply-all")
+  .argument("<message_ref>", "Stable message ref")
+  .requiredOption("--body <body>", "Reply body text")
+  .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
+  .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .action(async (messageRef: string, options, command: Command) => {
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(
+          await adapter.replyAll(
+            context.account,
+            messageRef,
+            {
+              cc: options.cc ?? [],
+              bcc: options.bcc ?? [],
+              body: options.body,
+            },
+            context,
+          ),
+        );
+      },
+    );
+  });
+
+mailCommand
+  .command("forward")
+  .argument("<message_ref>", "Stable message ref")
+  .requiredOption("--to <email>", "Recipient email address", collectStringOption, [])
+  .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
+  .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .requiredOption("--body <body>", "Forward body text")
+  .action(async (messageRef: string, options, command: Command) => {
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(
+          await adapter.forward(
+            context.account,
+            messageRef,
+            {
+              to: options.to,
+              cc: options.cc ?? [],
+              bcc: options.bcc ?? [],
+              body: options.body,
+            },
+            context,
+          ),
+        );
+      },
+    );
+  });
+
+mailCommand
+  .command("archive")
+  .argument("<message_ref>", "Stable message ref")
+  .action(async (messageRef: string, _options, command: Command) => {
+    await runMessageAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.archive(context.account, messageRef, context));
       },
     );
   });

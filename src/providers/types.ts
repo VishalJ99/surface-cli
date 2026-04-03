@@ -1,12 +1,17 @@
 import type { MailAccount } from "../contracts/account.js";
 import type {
+  ArchiveResultEnvelope,
   AttachmentDownloadEnvelope,
   AttachmentListEnvelope,
   FetchUnreadQuery,
+  ForwardInput,
   NormalizedThreadRecord,
   ReadResultEnvelope,
+  ReplyInput,
   RsvpResponse,
   RsvpResultEnvelope,
+  SendMessageInput,
+  SendResultEnvelope,
   SearchQuery,
 } from "../contracts/mail.js";
 import type { AccountPaths, SurfacePaths } from "../paths.js";
@@ -60,6 +65,34 @@ export interface MailProviderAdapter {
     response: RsvpResponse,
     context: ProviderContext,
   ): Promise<RsvpResultEnvelope>;
+  sendMessage(
+    account: MailAccount,
+    input: SendMessageInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  reply(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  replyAll(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  forward(
+    account: MailAccount,
+    messageRef: string,
+    input: ForwardInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  archive(
+    account: MailAccount,
+    messageRef: string,
+    context: ProviderContext,
+  ): Promise<ArchiveResultEnvelope>;
   downloadAttachment(
     account: MailAccount,
     messageRef: string,
