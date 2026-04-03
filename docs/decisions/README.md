@@ -36,3 +36,4 @@ Use zero-padded sequential numbers:
 - `0012-v1-supports-archive-not-delete.md`
 - `0013-write-actions-require-explicit-local-allowlists.md`
 - `0014-outlook-write-actions-use-ui-fallbacks.md`
+- `0015-draft-is-a-flagged-send-disposition.md`

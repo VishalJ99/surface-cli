@@ -28,10 +28,10 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface mail search ...`
 - `surface mail fetch-unread ...`
 - `surface mail read <message_ref>`
-- `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body>`
-- `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>]`
-- `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>]`
-- `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body>`
+- `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--draft]`
+- `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
+- `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
+- `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body> [--draft]`
 - `surface mail archive <message_ref>`
 - `surface mail rsvp <message_ref> --response <accept|decline|tentative>`
 
@@ -56,6 +56,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `read` should accept a stable `message_ref`.
 - Commands should not require JSON paths into prior command output.
 - Refs should be opaque globally unique strings prefixed by entity kind.
+- Draft creation should be an explicit `--draft` flag on send-like commands, not a silent config rewrite of `send`.
 
 ## Stable Ref Format
 
@@ -398,6 +399,37 @@ Recommended example:
 }
 ```
 
+### `surface mail send --account <account> --to <email> --subject <subject> --body <body> --draft`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "send",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "status": "drafted",
+  "subject": "[surface-test] draft probe",
+  "recipients": {
+    "to": [
+      {
+        "name": "Jain, Vishal",
+        "email": "sink@example.com"
+      }
+    ],
+    "cc": [],
+    "bcc": []
+  },
+  "thread_ref": "thr_01DRAFTEXAMPLE000000000000",
+  "message_ref": "msg_01DRAFTEXAMPLE000000000000",
+  "in_reply_to_message_ref": null
+}
+```
+
 ### `surface mail reply <message_ref>`
 
 Recommended example:
@@ -586,6 +618,7 @@ payload is stale.
 - `summary` should be `null` when no summary was generated
 - truncation should not be enforced in the first implementation slice; `truncated` should remain `false` until truncation logic is added
 - `archive` is supported in v1, but `delete` is not
+- `--draft` should return the same envelope shape as send-like commands, with `status = "drafted"`
 
 ## Remaining Open Questions
 

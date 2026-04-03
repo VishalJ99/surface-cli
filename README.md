@@ -30,6 +30,7 @@ surface mail fetch-unread --account work --limit 25
 surface mail search --account work --text invoice --limit 10
 surface mail read msg_01...
 surface mail send --account school --to me@example.com --subject "hello" --body "test"
+surface mail send --account school --to me@example.com --subject "hello" --body "test" --draft
 surface mail reply msg_01... --body "Thanks"
 surface mail reply-all msg_01... --body "Thanks all"
 surface mail forward msg_01... --to me@example.com --body "FYI"
@@ -79,6 +80,7 @@ What is still intentionally incomplete:
 - Gmail OAuth login wiring
 - Gmail `search`, `fetch-unread`, `read`, and attachments
 - Outlook attachment download
+- `--draft` handling for send / reply / reply-all / forward
 - move / delete
 - broader automated tests and cache-prune policy
 

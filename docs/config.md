@@ -119,8 +119,9 @@ export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 Current write-path behavior:
 
 - if `SURFACE_WRITES_ENABLED` is not set, do not send
-- if `SURFACE_SEND_MODE=draft_only`, reject live send actions because draft creation is not implemented yet
-- if `SURFACE_SEND_MODE=allow_send`, only send when every recipient is on `SURFACE_TEST_RECIPIENTS`
+- if `SURFACE_SEND_MODE=draft_only`, send-like commands without `--draft` should error and instruct the caller to rerun with `--draft`
+- if `SURFACE_SEND_MODE=allow_send`, send-like commands without `--draft` may send when every recipient is on `SURFACE_TEST_RECIPIENTS`
+- `--draft` should remain available in both modes for `send`, `reply`, `reply-all`, and `forward`
 - reject live write actions when the acting account is not on `SURFACE_TEST_ACCOUNT_ALLOWLIST`
 - `archive` requires `SURFACE_WRITES_ENABLED=1` and any configured account allowlist, but it does not check recipients
 
@@ -133,4 +134,4 @@ Current write-path behavior:
 - defining provider-specific account settings here
 - storing provider secrets directly in the config file
 - defining truncation configuration before truncation is implemented
-- defining provider-agnostic draft semantics before the first live send path is stable
+- defining provider-specific draft persistence details before the first `--draft` implementation lands
