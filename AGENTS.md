@@ -86,3 +86,13 @@ Before completing work:
 
 Use Linear for execution tracking, not as the architecture source of truth.
 Relevant Linear issues should reference the ADR or contract doc they implement.
+
+## Ticket Discipline
+
+- Every substantive task must map to a Linear issue under the Surface project.
+- Before starting meaningful work, identify the active issue ID in commentary.
+- If no suitable issue exists, create one before continuing.
+- If a task touches multiple issues, state one primary active issue and list secondary related issues.
+- When scope changes materially, update the existing issue or create a follow-up issue.
+- When a task is complete, move the issue to `Done`.
+- Do not leave completed work only in git history or chat without a corresponding Linear update.
