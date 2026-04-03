@@ -80,6 +80,8 @@ Suggested default path:
 - `SURFACE_SUMMARIZER_MODEL`
 - `SURFACE_SUMMARY_INPUT_MAX_BYTES`
 - `SURFACE_SUMMARIZER_TIMEOUT_MS`
+- `SURFACE_OPENCLAW_AGENT`
+- `OPENROUTER_API_KEY`
 - `SURFACE_WRITES_ENABLED`
 - `SURFACE_SEND_MODE`
 - `SURFACE_TEST_SUBJECT_PREFIX`
@@ -88,6 +90,18 @@ Suggested default path:
 
 Secrets such as API keys should not be stored in the config file. They should live in
 environment variables or provider/account-specific auth storage.
+
+Summarizer backend runtime requirements:
+
+- `openrouter`
+  Requires `OPENROUTER_API_KEY` in the shell environment.
+- `openclaw`
+  Requires the `openclaw` CLI to be installed and configured locally.
+  Surface currently invokes:
+  `openclaw --no-color --log-level silent agent --agent <id> --json --message ...`
+  The default agent id is `main`, or `SURFACE_OPENCLAW_AGENT` if set.
+  If OpenClaw model auth is stale or unavailable, Surface should still return mail results
+  with `summary: null`.
 
 For a public repo, prefer local environment variables for write safety instead of
 committing real recipient addresses into tracked files.
