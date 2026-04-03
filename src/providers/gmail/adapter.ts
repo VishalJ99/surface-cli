@@ -8,6 +8,7 @@ import type {
   AttachmentListEnvelope,
   FetchUnreadQuery,
   ForwardInput,
+  MarkMessagesResultEnvelope,
   NormalizedThreadRecord,
   ReadResultEnvelope,
   ReplyInput,
@@ -86,6 +87,14 @@ export class GmailApiAdapter implements MailProviderAdapter {
 
   async archive(account: MailAccount, _messageRef: string): Promise<ArchiveResultEnvelope> {
     notImplemented("Gmail archive is not wired yet.", account.name);
+  }
+
+  async markRead(account: MailAccount, _messageRefs: string[]): Promise<MarkMessagesResultEnvelope> {
+    notImplemented("Gmail mark-read is not wired yet.", account.name);
+  }
+
+  async markUnread(account: MailAccount, _messageRefs: string[]): Promise<MarkMessagesResultEnvelope> {
+    notImplemented("Gmail mark-unread is not wired yet.", account.name);
   }
 
   async downloadAttachment(account: MailAccount): Promise<AttachmentDownloadEnvelope> {

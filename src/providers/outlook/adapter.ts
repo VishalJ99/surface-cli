@@ -10,6 +10,7 @@ import type {
   AttachmentListEnvelope,
   ComposeRecipients,
   ForwardInput,
+  MarkMessagesResultEnvelope,
   MessageEnvelope,
   MessageInvite,
   MessageParticipant,
@@ -787,6 +788,43 @@ async function resolveMessageActionTarget(
   return { locator, stored };
 }
 
+async function resolveMessageStateTarget(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<{ locator: OutlookMessageLocator; stored: StoredMessageRecord }> {
+  let resolved = await resolveMessageActionTarget(account, messageRef, context);
+  if (!resolved.locator.message_id) {
+    const refreshed = await refreshStoredMessage(account, messageRef, context);
+    const locatorRow = context.db.findProviderLocator("message", messageRef);
+    if (!locatorRow) {
+      throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+        account: account.name,
+        messageRef,
+        threadRef: refreshed.thread_ref,
+      });
+    }
+    resolved = {
+      stored: refreshed,
+      locator: parseOutlookMessageLocator(locatorRow.locator_json),
+    };
+  }
+
+  if (!resolved.locator.message_id) {
+    throw new SurfaceError(
+      "unsupported",
+      `Message '${messageRef}' does not expose enough Outlook metadata for read-state actions.`,
+      {
+        account: account.name,
+        messageRef,
+        threadRef: resolved.stored.thread_ref,
+      },
+    );
+  }
+
+  return resolved;
+}
+
 async function resolveAttachmentDownloadTarget(
   account: MailAccount,
   messageRef: string,
@@ -1101,6 +1139,20 @@ function buildArchiveEnvelope(
   };
 }
 
+function buildMarkMessagesEnvelope(
+  account: MailAccount,
+  command: MarkMessagesResultEnvelope["command"],
+  updated: MarkMessagesResultEnvelope["updated"],
+): MarkMessagesResultEnvelope {
+  return {
+    schema_version: "1",
+    command,
+    account: account.name,
+    source: sourceInfo(account),
+    updated,
+  };
+}
+
 function buildCreateItemHeaders(headers: Record<string, string>): Record<string, string> {
   return {
     ...headers,
@@ -1122,6 +1174,10 @@ function buildOutlookRestHeaders(headers: Record<string, string>): Record<string
 
 function buildOutlookRestAttachmentValueUrl(messageId: string, attachmentId: string): string {
   return `https://outlook.office.com/api/v2.0/me/messages('${encodeURIComponent(messageId)}')/attachments('${encodeURIComponent(attachmentId)}')/$value`;
+}
+
+function buildOutlookRestMessageUrl(messageId: string): string {
+  return `https://outlook.office.com/api/v2.0/me/messages('${encodeURIComponent(messageId)}')`;
 }
 
 function buildMeetingResponseType(response: RsvpResponse): "AcceptItem" | "DeclineItem" | "TentativelyAcceptItem" {
@@ -1201,6 +1257,49 @@ async function performOutlookRsvpAction(
     throw new SurfaceError(
       "transport_error",
       `Outlook RSVP request failed with response code '${responseMessage?.ResponseCode ?? "UnknownError"}'.`,
+    );
+  }
+}
+
+async function performOutlookReadStateAction(
+  session: Awaited<ReturnType<typeof launchOutlookSession>>,
+  locator: OutlookMessageLocator,
+  unread: boolean,
+  timeoutMs: number,
+): Promise<void> {
+  if (!locator.message_id) {
+    throw new SurfaceError("unsupported", "Outlook read-state mutation requires a message id.");
+  }
+
+  const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
+    timeoutMs,
+  });
+  const response = await session.context.request.fetch(
+    buildOutlookRestMessageUrl(locator.message_id),
+    {
+      method: "PATCH",
+      headers: {
+        ...buildOutlookRestHeaders(capturedSession.headers),
+        "content-type": "application/json",
+      },
+      data: JSON.stringify({ IsRead: !unread }),
+      failOnStatusCode: false,
+      timeout: timeoutMs,
+    },
+  );
+
+  if (!response.ok()) {
+    throw new SurfaceError(
+      "transport_error",
+      `Outlook read-state update failed with status ${response.status()}.`,
+    );
+  }
+
+  const data = await response.json();
+  if (typeof data?.IsRead !== "boolean" || data.IsRead !== !unread) {
+    throw new SurfaceError(
+      "transport_error",
+      `Outlook read-state update did not return the expected IsRead=${!unread} state.`,
     );
   }
 }
@@ -1299,6 +1398,51 @@ async function fetchOutlookThreads(
     await session.context.close();
     session.cleanup?.();
   }
+}
+
+async function mutateOutlookReadState(
+  account: MailAccount,
+  messageRefs: string[],
+  unread: boolean,
+  context: ProviderContext,
+): Promise<MarkMessagesResultEnvelope> {
+  if (messageRefs.length === 0) {
+    throw new SurfaceError("invalid_argument", "At least one message ref is required.", {
+      account: account.name,
+    });
+  }
+
+  assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
+
+  const targets = [];
+  for (const messageRef of messageRefs) {
+    targets.push(await resolveMessageStateTarget(account, messageRef, context));
+  }
+
+  const profileDir = outlookProfileDir(context);
+  const session = await launchOutlookSession(profileDir, { headless: true });
+  try {
+    for (const target of targets) {
+      await performOutlookReadStateAction(session, target.locator, unread, context.config.providerTimeoutMs);
+    }
+  } finally {
+    await session.context.close();
+    session.cleanup?.();
+  }
+
+  const threadRefs = targets.map((target) => target.stored.thread_ref);
+  context.db.updateMessagesUnreadState(messageRefs, unread);
+  context.db.recomputeThreadUnreadCounts(threadRefs);
+
+  return buildMarkMessagesEnvelope(
+    account,
+    unread ? "mark-unread" : "mark-read",
+    targets.map((target, index) => ({
+      message_ref: messageRefs[index]!,
+      thread_ref: target.stored.thread_ref,
+      unread,
+    })),
+  );
 }
 
 export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
@@ -1469,6 +1613,22 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     const refreshed = await refreshStoredMessage(account, messageRef, context);
     const parsed = parseStoredMessage(refreshed);
     return buildRsvpEnvelope(account, messageRef, stored.thread_ref, response, parsed.invite);
+  }
+
+  async markRead(
+    account: MailAccount,
+    messageRefs: string[],
+    context: ProviderContext,
+  ): Promise<MarkMessagesResultEnvelope> {
+    return mutateOutlookReadState(account, messageRefs, false, context);
+  }
+
+  async markUnread(
+    account: MailAccount,
+    messageRefs: string[],
+    context: ProviderContext,
+  ): Promise<MarkMessagesResultEnvelope> {
+    return mutateOutlookReadState(account, messageRefs, true, context);
   }
 
   async sendMessage(

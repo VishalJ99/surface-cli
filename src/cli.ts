@@ -101,6 +101,46 @@ async function runMessageAction(
   });
 }
 
+async function runMessageBatchAction(
+  options: GlobalOptions,
+  messageRefs: string[],
+  action: (
+    context: ReturnType<typeof createAccountRuntimeContext>,
+    resolved: Array<{ message_ref: string; thread_ref: string; account_id: string }>,
+  ) => Promise<void> | void,
+): Promise<void> {
+  await runAction(options, async (context) => {
+    if (messageRefs.length === 0) {
+      throw new SurfaceError("invalid_argument", "At least one message ref is required.");
+    }
+
+    const resolved = messageRefs.map((messageRef) => {
+      const record = context.db.findMessageByRef(messageRef);
+      if (!record) {
+        throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+          messageRef,
+        });
+      }
+      return record;
+    });
+
+    const accountId = resolved[0]!.account_id;
+    if (resolved.some((record) => record.account_id !== accountId)) {
+      throw new SurfaceError(
+        "invalid_argument",
+        "All message refs in one mark-read or mark-unread command must belong to the same account.",
+      );
+    }
+
+    const account = context.db.findAccountById(accountId);
+    if (!account) {
+      throw new SurfaceError("not_found", `Account for the provided message refs was not found.`);
+    }
+
+    await action(createAccountRuntimeContext(context, account), resolved);
+  });
+}
+
 const program = new Command();
 program
   .name("surface")
@@ -319,12 +359,16 @@ mailCommand
   .command("read")
   .argument("<message_ref>", "Stable message ref")
   .option("--refresh", "Bypass local cache and fetch live", false)
+  .option("--mark-read", "Mark the message as read after resolving the ref", false)
   .action(async (messageRef: string, options, command: Command) => {
     await runMessageAction(
       command.optsWithGlobals<GlobalOptions>(),
       messageRef,
       async (context) => {
         const adapter = resolveProviderAdapter(context.account);
+        if (Boolean(options.markRead)) {
+          await adapter.markRead(context.account, [messageRef], context);
+        }
         writeJson(await adapter.readMessage(context.account, messageRef, Boolean(options.refresh), context));
       },
     );
@@ -489,6 +533,34 @@ mailCommand
       async (context) => {
         const adapter = resolveProviderAdapter(context.account);
         writeJson(await adapter.archive(context.account, messageRef, context));
+      },
+    );
+  });
+
+mailCommand
+  .command("mark-read")
+  .argument("<message_refs...>", "One or more stable message refs")
+  .action(async (messageRefs: string[], _options, command: Command) => {
+    await runMessageBatchAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRefs,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.markRead(context.account, messageRefs, context));
+      },
+    );
+  });
+
+mailCommand
+  .command("mark-unread")
+  .argument("<message_refs...>", "One or more stable message refs")
+  .action(async (messageRefs: string[], _options, command: Command) => {
+    await runMessageBatchAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      messageRefs,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        writeJson(await adapter.markUnread(context.account, messageRefs, context));
       },
     );
   });

@@ -5,6 +5,7 @@ import type {
   AttachmentListEnvelope,
   FetchUnreadQuery,
   ForwardInput,
+  MarkMessagesResultEnvelope,
   NormalizedThreadRecord,
   ReadResultEnvelope,
   ReplyInput,
@@ -93,6 +94,16 @@ export interface MailProviderAdapter {
     messageRef: string,
     context: ProviderContext,
   ): Promise<ArchiveResultEnvelope>;
+  markRead(
+    account: MailAccount,
+    messageRefs: string[],
+    context: ProviderContext,
+  ): Promise<MarkMessagesResultEnvelope>;
+  markUnread(
+    account: MailAccount,
+    messageRefs: string[],
+    context: ProviderContext,
+  ): Promise<MarkMessagesResultEnvelope>;
   downloadAttachment(
     account: MailAccount,
     messageRef: string,

@@ -871,6 +871,66 @@ export class SurfaceDatabase {
       });
   }
 
+  updateMessagesUnreadState(messageRefs: string[], unread: boolean): void {
+    if (messageRefs.length === 0) {
+      return;
+    }
+
+    const update = this.connection.prepare(
+      `
+      UPDATE messages
+      SET unread = @unread,
+          last_synced_at = @last_synced_at
+      WHERE message_ref = @message_ref
+      `,
+    );
+    const lastSyncedAt = nowIsoUtc();
+
+    for (const messageRef of messageRefs) {
+      update.run({
+        message_ref: messageRef,
+        unread: unread ? 1 : 0,
+        last_synced_at: lastSyncedAt,
+      });
+    }
+  }
+
+  recomputeThreadUnreadCounts(threadRefs: string[]): void {
+    if (threadRefs.length === 0) {
+      return;
+    }
+
+    const selectUnreadCount = this.connection.prepare(
+      `
+      SELECT COUNT(*) AS unread_count
+      FROM messages
+      WHERE thread_ref = ?
+        AND unread = 1
+      `,
+    );
+    const updateThread = this.connection.prepare(
+      `
+      UPDATE threads
+      SET unread_count = @unread_count,
+          labels_json = @labels_json,
+          last_synced_at = @last_synced_at
+      WHERE thread_ref = @thread_ref
+      `,
+    );
+    const lastSyncedAt = nowIsoUtc();
+
+    for (const threadRef of new Set(threadRefs)) {
+      const row = selectUnreadCount.get(threadRef) as { unread_count: number };
+      const unreadCount = row?.unread_count ?? 0;
+      updateThread.run({
+        thread_ref: threadRef,
+        unread_count: unreadCount,
+        labels_json: JSON.stringify(unreadCount > 0 ? ["inbox", "unread"] : ["inbox"]),
+        last_synced_at: lastSyncedAt,
+      });
+    }
+  }
+
   findMessageByRef(messageRef: string): {
     message_ref: string;
     thread_ref: string;

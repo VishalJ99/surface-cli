@@ -119,6 +119,7 @@ Current write-path behavior:
 - `--draft` should remain available in both modes for `send`, `reply`, `reply-all`, and `forward`
 - reject live write actions when the acting account is not on `SURFACE_TEST_ACCOUNT_ALLOWLIST`
 - `archive` requires `SURFACE_WRITES_ENABLED=1` and any configured account allowlist, but it does not check recipients
+- `mark-read`, `mark-unread`, and `read --mark-read` require `SURFACE_WRITES_ENABLED=1` and any configured account allowlist, but they do not check recipients
 
 ## Questions To Revisit Later
 

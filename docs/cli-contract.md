@@ -27,12 +27,14 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 
 - `surface mail search ...`
 - `surface mail fetch-unread ...`
-- `surface mail read <message_ref>`
+- `surface mail read <message_ref> [--mark-read]`
 - `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--draft]`
 - `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
 - `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
 - `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body> [--draft]`
 - `surface mail archive <message_ref>`
+- `surface mail mark-read <message_ref>...`
+- `surface mail mark-unread <message_ref>...`
 - `surface mail rsvp <message_ref> --response <accept|decline|tentative>`
 
 ### Attachments
@@ -57,6 +59,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - Commands should not require JSON paths into prior command output.
 - Refs should be opaque globally unique strings prefixed by entity kind.
 - Draft creation should be an explicit `--draft` flag on send-like commands, not a silent config rewrite of `send`.
+- `read` stays side-effect free by default, with `--mark-read` as an explicit convenience flag.
 
 ## Stable Ref Format
 
@@ -287,6 +290,52 @@ Recommended example:
       }
     ]
   }
+}
+```
+
+### `surface mail mark-read <message_ref>...`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "mark-read",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "updated": [
+    {
+      "message_ref": "msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P",
+      "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
+      "unread": false
+    }
+  ]
+}
+```
+
+### `surface mail mark-unread <message_ref>...`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "mark-unread",
+  "account": "uni",
+  "source": {
+    "provider": "outlook",
+    "transport": "outlook-web-playwright"
+  },
+  "updated": [
+    {
+      "message_ref": "msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P",
+      "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
+      "unread": true
+    }
+  ]
 }
 ```
 

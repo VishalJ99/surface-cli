@@ -30,6 +30,8 @@ Each provider implementation must support:
 - reply-all
 - forward
 - archive
+- mark-read
+- mark-unread
 - rsvp when meeting invites are supported by the provider
 - list attachments
 - download attachment
@@ -55,6 +57,8 @@ interface MailProviderAdapter {
   replyAll(account: MailAccount, messageRef: string, input: ReplyInput): Promise<SendResultEnvelope>;
   forward(account: MailAccount, messageRef: string, input: ForwardInput): Promise<SendResultEnvelope>;
   archive(account: MailAccount, messageRef: string): Promise<ArchiveResultEnvelope>;
+  markRead(account: MailAccount, messageRefs: string[]): Promise<MarkMessagesResultEnvelope>;
+  markUnread(account: MailAccount, messageRefs: string[]): Promise<MarkMessagesResultEnvelope>;
   rsvp(
     account: MailAccount,
     messageRef: string,
@@ -97,6 +101,8 @@ Each account/provider transport should expose capability flags such as:
 - `reply_all`
 - `forward`
 - `archive`
+- `mark_read`
+- `mark_unread`
 - `rsvp`
 
 Capabilities are account/transport-level. Message applicability should be derived from message facts.
@@ -105,6 +111,8 @@ Capabilities are account/transport-level. Message applicability should be derive
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists
 - `archive` is part of the supported v1 action set
+- read-state mutations such as `mark-read`, `mark-unread`, and `read --mark-read` are mailbox mutations
+  and must stay behind explicit local write enablement and any configured account allowlist
 - `delete` is intentionally deferred
 - providers may use transport-specific fallback paths when the primary UI or API surface is not stable,
   but those fallbacks must be documented in `docs/decisions/`

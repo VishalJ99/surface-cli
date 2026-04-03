@@ -194,6 +194,18 @@ export interface ArchiveResultEnvelope {
   status: "archived";
 }
 
+export interface MarkMessagesResultEnvelope {
+  schema_version: "1";
+  command: "mark-read" | "mark-unread";
+  account: string;
+  source: SourceInfo;
+  updated: Array<{
+    message_ref: string;
+    thread_ref: string;
+    unread: boolean;
+  }>;
+}
+
 export interface RsvpResultEnvelope {
   schema_version: "1";
   command: "rsvp";
