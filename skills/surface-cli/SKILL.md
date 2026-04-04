@@ -15,28 +15,106 @@ stdout and stores local state in `~/.surface-cli`.
 - the user needs a provider-neutral CLI for search, unread fetch, read, attachments, or actions
 - you need stable `thread_ref` / `message_ref` values for follow-up commands
 
-## Command Model
+## Prerequisites
 
-- Enumerate accounts with `surface account list`
-- Check auth with `surface auth status [account]`
-- Broad triage:
-  - `surface mail fetch-unread --account <account> --limit <n>`
-  - `surface mail search --account <account> --text <query> --limit <n>`
-- Read one message:
-  - `surface mail read <message_ref>`
-  - `surface mail read <message_ref> --mark-read`
-- Attachments:
-  - `surface attachment list <message_ref>`
-  - `surface attachment download <message_ref> <attachment_id>`
-- Write and mailbox actions:
-  - `surface mail send --account <account> --to <email> --subject <subject> --body <body> [--draft]`
-  - `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
-  - `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
-  - `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body> [--draft]`
-  - `surface mail archive <message_ref>`
-  - `surface mail mark-read <message_ref>...`
-  - `surface mail mark-unread <message_ref>...`
-  - `surface mail rsvp <message_ref> --response <accept|decline|tentative>`
+1. Surface CLI installed (`surface --help` should work)
+2. At least one configured account
+3. Valid auth for the target account
+
+Check setup:
+
+```bash
+surface account list
+surface auth status
+```
+
+## Account Setup
+
+Add an account:
+
+```bash
+surface account add personal_2 --provider gmail --transport gmail-api --email you@example.com
+surface account add uni --provider outlook --transport outlook-web-playwright --email you@example.com
+```
+
+Log in:
+
+```bash
+surface auth login personal_2
+surface auth login uni
+```
+
+Local policy lives in:
+
+```text
+~/.surface-cli/config.toml
+```
+
+Important local knobs:
+
+- `writes_enabled`
+- `send_mode`
+- `test_recipients`
+- `test_account_allowlist`
+
+## Common Operations
+
+### List Accounts
+
+```bash
+surface account list
+surface auth status
+surface auth status personal_2
+```
+
+### Fetch Unread Threads
+
+```bash
+surface mail fetch-unread --account uni --limit 10
+surface mail fetch-unread --account personal_2 --limit 20
+```
+
+### Search Mail
+
+```bash
+surface mail search --account uni --text "invoice" --limit 10
+surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
+```
+
+### Read One Message
+
+```bash
+surface mail read msg_01...
+surface mail read msg_01... --refresh
+surface mail read msg_01... --mark-read
+```
+
+### Attachments
+
+```bash
+surface attachment list msg_01...
+surface attachment download msg_01... att_01...
+```
+
+### Compose And Send
+
+```bash
+surface mail send --account personal_2 --to recipient@example.com --subject "Hello" --body "Test"
+surface mail send --account personal_2 --to recipient@example.com --subject "Hello" --body "Test" --draft
+surface mail reply msg_01... --body "Thanks"
+surface mail reply msg_01... --body "Thanks" --draft
+surface mail reply-all msg_01... --body "Thanks everyone"
+surface mail forward msg_01... --to recipient@example.com --body "FYI"
+```
+
+### Mailbox Actions
+
+```bash
+surface mail archive msg_01...
+surface mail mark-read msg_01...
+surface mail mark-unread msg_01...
+surface mail rsvp msg_01... --response accept
+```
 
 ## Workflow
 
@@ -52,6 +130,7 @@ stdout and stores local state in `~/.surface-cli`.
 - Use `message_ref` and `thread_ref` for follow-up commands.
 - `read` is cache-first by default. Use `--refresh` when you need live provider state.
 - `read` does not download attachments. Use `surface attachment download`.
+- `fetch-unread` and `search` do not mutate mailbox state.
 - `--draft` is the safe compose path when you do not need to send immediately.
 
 ## Provider Notes
@@ -68,6 +147,8 @@ stdout and stores local state in `~/.surface-cli`.
 - Do not send mail unless write safety is enabled locally.
 - Prefer the configured sink recipients from local config; do not invent recipients.
 - For send-like tests, use `--draft` unless the task explicitly requires a live send.
+- Do not assume Gmail RSVP works; it is intentionally deferred until Calendar integration exists.
+- When testing live sends, only send to recipients already configured locally for safe testing.
 
 ## Examples
 
@@ -77,6 +158,7 @@ surface auth status
 surface mail fetch-unread --account uni --limit 10
 surface mail search --account personal_2 --text 'has:attachment newer_than:30d' --limit 5
 surface mail read msg_01...
+surface mail read msg_01... --mark-read
 surface attachment list msg_01...
 surface attachment download msg_01... att_01...
 surface mail reply msg_01... --body 'Thanks' --draft
