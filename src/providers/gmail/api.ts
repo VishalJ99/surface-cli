@@ -18,6 +18,22 @@ export interface GmailThreadRecord {
   messages?: GmailMessagePayload[];
 }
 
+export interface GmailMessageMutation {
+  addLabelIds?: string[];
+  removeLabelIds?: string[];
+}
+
+export interface GmailMessageReference {
+  id?: string;
+  threadId?: string;
+  labelIds?: string[];
+}
+
+export interface GmailDraftRecord {
+  id?: string;
+  message?: GmailMessageReference;
+}
+
 interface GmailListThreadsResponse {
   threads?: GmailThreadStub[];
   nextPageToken?: string;
@@ -134,4 +150,68 @@ export async function downloadGmailAttachmentBytes(
     context,
     `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
   );
+}
+
+export async function modifyGmailMessage(
+  account: MailAccount,
+  context: ProviderContext,
+  messageId: string,
+  mutation: GmailMessageMutation,
+): Promise<GmailMessageReference> {
+  return gmailApiJson<GmailMessageReference>(
+    account,
+    context,
+    `/messages/${encodeURIComponent(messageId)}/modify`,
+    {
+      method: "POST",
+      body: mutation,
+    },
+  );
+}
+
+export async function modifyGmailThread(
+  account: MailAccount,
+  context: ProviderContext,
+  threadId: string,
+  mutation: GmailMessageMutation,
+): Promise<GmailThreadRecord> {
+  return gmailApiJson<GmailThreadRecord>(
+    account,
+    context,
+    `/threads/${encodeURIComponent(threadId)}/modify`,
+    {
+      method: "POST",
+      body: mutation,
+    },
+  );
+}
+
+export async function sendGmailRawMessage(
+  account: MailAccount,
+  context: ProviderContext,
+  payload: { raw: string; threadId?: string | null },
+): Promise<GmailMessageReference> {
+  return gmailApiJson<GmailMessageReference>(account, context, "/messages/send", {
+    method: "POST",
+    body: {
+      raw: payload.raw,
+      ...(payload.threadId ? { threadId: payload.threadId } : {}),
+    },
+  });
+}
+
+export async function createGmailDraft(
+  account: MailAccount,
+  context: ProviderContext,
+  payload: { raw: string; threadId?: string | null },
+): Promise<GmailDraftRecord> {
+  return gmailApiJson<GmailDraftRecord>(account, context, "/drafts", {
+    method: "POST",
+    body: {
+      message: {
+        raw: payload.raw,
+        ...(payload.threadId ? { threadId: payload.threadId } : {}),
+      },
+    },
+  });
 }

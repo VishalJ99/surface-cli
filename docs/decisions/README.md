@@ -45,3 +45,6 @@ Use zero-padded sequential numbers:
 - `0021-local-config-stores-policy-not-account-state.md`
 - `0022-gmail-thread-read-path-uses-threads-list-and-threads-get.md`
 - `0023-gmail-attachment-bytes-come-from-inline-parts-or-attachments-get.md`
+- `0024-gmail-compose-uses-raw-mime-send-and-drafts-create.md`
+- `0025-gmail-archive-and-read-state-use-label-mutations.md`
+- `0026-gmail-rsvp-is-deferred-to-calendar-integration.md`

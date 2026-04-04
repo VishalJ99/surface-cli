@@ -7,6 +7,7 @@ import type {
   ArchiveResultEnvelope,
   AttachmentDownloadEnvelope,
   AttachmentListEnvelope,
+  ComposeRecipients,
   FetchUnreadQuery,
   ForwardInput,
   MarkMessagesResultEnvelope,
@@ -26,16 +27,26 @@ import type {
   ThreadParticipant,
 } from "../../contracts/mail.js";
 import { SurfaceError, notImplemented } from "../../lib/errors.js";
+import { assertWriteAllowed } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeThread } from "../../summarizer.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
-import { downloadGmailAttachmentBytes, getGmailThread, listGmailThreads, type GmailThreadRecord } from "./api.js";
+import {
+  createGmailDraft,
+  downloadGmailAttachmentBytes,
+  getGmailThread,
+  listGmailThreads,
+  modifyGmailMessage,
+  modifyGmailThread,
+  sendGmailRawMessage,
+  type GmailMessageReference,
+  type GmailThreadRecord,
+} from "./api.js";
 import { clearGmailAuthState, gmailAuthStatus, runGmailLogin } from "./oauth.js";
 import {
   decodeBase64UrlBytes,
   decodePartData,
-  extractMessageBodies,
   headerDateToIso,
   headerIndex,
   internalDateToIso,
@@ -357,6 +368,184 @@ function parseStoredMessage(record: StoredMessageRecord) {
   };
 }
 
+function participantFromEmail(email: string): MessageParticipant {
+  return {
+    name: email,
+    email,
+  };
+}
+
+function recipientsFromInput(input: { to: string[]; cc: string[]; bcc: string[] }): ComposeRecipients {
+  return {
+    to: input.to.map(participantFromEmail),
+    cc: input.cc.map(participantFromEmail),
+    bcc: input.bcc.map(participantFromEmail),
+  };
+}
+
+function normalizeEmailList(values: Array<string | null | undefined>): string[] {
+  const deduped = new Set<string>();
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized) {
+      continue;
+    }
+    deduped.add(normalized);
+  }
+  return [...deduped];
+}
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/\r?\n/g, " ").trim();
+}
+
+function prefixSubject(subject: string, prefix: "Re" | "Fwd"): string {
+  const normalized = subject.trim();
+  if (!normalized) {
+    return `${prefix}:`;
+  }
+  const matcher = prefix === "Re" ? /^re:\s/i : /^(fwd|fw):\s/i;
+  return matcher.test(normalized) ? normalized : `${prefix}: ${normalized}`;
+}
+
+function quoteLines(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function buildReplyBody(inputBody: string, stored: StoredMessageRecord): string {
+  const parsed = parseStoredMessage(stored);
+  const originalBody = parsed.body.text.trim();
+  const originalFrom = parsed.envelope.from?.email ?? parsed.envelope.from?.name ?? "unknown sender";
+  const originalDate = parsed.envelope.sent_at ?? parsed.envelope.received_at ?? "unknown time";
+  if (!originalBody) {
+    return inputBody;
+  }
+  return `${inputBody}\n\nOn ${originalDate}, ${originalFrom} wrote:\n${quoteLines(originalBody)}`;
+}
+
+function buildForwardBody(inputBody: string, stored: StoredMessageRecord): string {
+  const parsed = parseStoredMessage(stored);
+  const originalBody = parsed.body.text.trim();
+  const lines = [
+    inputBody,
+    "",
+    "---------- Forwarded message ---------",
+    `From: ${parsed.envelope.from?.email ?? parsed.envelope.from?.name ?? ""}`,
+    `Date: ${parsed.envelope.sent_at ?? parsed.envelope.received_at ?? ""}`,
+    `Subject: ${parsed.envelope.subject ?? ""}`,
+    `To: ${parsed.envelope.to.map((mailbox) => mailbox.email).join(", ")}`,
+  ];
+  if (parsed.envelope.cc.length > 0) {
+    lines.push(`Cc: ${parsed.envelope.cc.map((mailbox) => mailbox.email).join(", ")}`);
+  }
+  lines.push("", originalBody);
+  return lines.join("\n").trim();
+}
+
+function encodeMimeBase64Url(mime: string): string {
+  return Buffer.from(mime, "utf8").toString("base64url");
+}
+
+function buildRawMimeMessage(input: {
+  from: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+  inReplyTo?: string | null;
+  references?: string | null;
+}): string {
+  const lines = [
+    `From: ${sanitizeHeaderValue(input.from)}`,
+    ...(input.to.length > 0 ? [`To: ${input.to.map(sanitizeHeaderValue).join(", ")}`] : []),
+    ...(input.cc.length > 0 ? [`Cc: ${input.cc.map(sanitizeHeaderValue).join(", ")}`] : []),
+    ...(input.bcc.length > 0 ? [`Bcc: ${input.bcc.map(sanitizeHeaderValue).join(", ")}`] : []),
+    `Subject: ${sanitizeHeaderValue(input.subject)}`,
+    ...(input.inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(input.inReplyTo)}`] : []),
+    ...(input.references ? [`References: ${sanitizeHeaderValue(input.references)}`] : []),
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    input.body.replace(/\r\n/g, "\n"),
+    "",
+  ];
+  return lines.join("\r\n");
+}
+
+function parseMessageLocator(locatorJson: string): { thread_id: string | null; message_id: string | null } {
+  const parsed = JSON.parse(locatorJson) as Record<string, unknown>;
+  return {
+    thread_id: typeof parsed.thread_id === "string" && parsed.thread_id ? parsed.thread_id : null,
+    message_id: typeof parsed.message_id === "string" && parsed.message_id ? parsed.message_id : null,
+  };
+}
+
+function latestStoredThreadMessage(
+  threadRef: string,
+  context: ProviderContext,
+): { message_ref: string | null; stored: StoredMessageRecord | null } {
+  const messageRef = context.db.listMessageRefsForThread(threadRef)[0] ?? null;
+  return {
+    message_ref: messageRef,
+    stored: messageRef ? context.db.getStoredMessage(messageRef) ?? null : null,
+  };
+}
+
+function buildSendEnvelope(
+  account: MailAccount,
+  command: SendResultEnvelope["command"],
+  status: SendResultEnvelope["status"],
+  subject: string,
+  recipients: ComposeRecipients,
+  result: { thread_ref: string | null; message_ref: string | null },
+  inReplyToMessageRef: string | null,
+): SendResultEnvelope {
+  return {
+    schema_version: "1",
+    command,
+    account: account.name,
+    source: sourceInfo(account),
+    status,
+    subject,
+    recipients,
+    thread_ref: result.thread_ref,
+    message_ref: result.message_ref,
+    in_reply_to_message_ref: inReplyToMessageRef,
+  };
+}
+
+function buildArchiveEnvelope(account: MailAccount, messageRef: string, threadRef: string): ArchiveResultEnvelope {
+  return {
+    schema_version: "1",
+    command: "archive",
+    account: account.name,
+    message_ref: messageRef,
+    thread_ref: threadRef,
+    source: sourceInfo(account),
+    status: "archived",
+  };
+}
+
+function buildMarkMessagesEnvelope(
+  account: MailAccount,
+  command: MarkMessagesResultEnvelope["command"],
+  updated: MarkMessagesResultEnvelope["updated"],
+): MarkMessagesResultEnvelope {
+  return {
+    schema_version: "1",
+    command,
+    account: account.name,
+    source: sourceInfo(account),
+    updated,
+  };
+}
+
 function buildReadEnvelope(
   account: MailAccount,
   messageRef: string,
@@ -597,6 +786,110 @@ async function refreshStoredMessage(
   return refreshed;
 }
 
+async function resolveGmailMessageContext(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<{
+  stored: StoredMessageRecord;
+  threadId: string;
+  messageId: string;
+  thread: GmailThreadRecord;
+  message: GmailMessagePayload;
+  headers: Record<string, string>;
+}> {
+  let stored = context.db.getStoredMessage(messageRef);
+  if (!stored) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  let locatorRow = context.db.findProviderLocator("message", messageRef);
+  if (!locatorRow) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    locatorRow = context.db.findProviderLocator("message", messageRef);
+  }
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  let locator = parseMessageLocator(locatorRow.locator_json);
+  if (!locator.thread_id || !locator.message_id) {
+    stored = await refreshStoredMessage(account, messageRef, context);
+    locatorRow = context.db.findProviderLocator("message", messageRef);
+    if (!locatorRow) {
+      throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+        account: account.name,
+        messageRef,
+      });
+    }
+    locator = parseMessageLocator(locatorRow.locator_json);
+  }
+
+  if (!locator.thread_id || !locator.message_id) {
+    throw new SurfaceError("transport_error", `Message '${messageRef}' is missing Gmail thread or message ids.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  const thread = await getGmailThread(account, context, locator.thread_id);
+  const message = (thread.messages ?? []).find((entry) => entry.id === locator.message_id);
+  if (!message) {
+    throw new SurfaceError("not_found", `Gmail could not find message '${messageRef}' in thread '${locator.thread_id}'.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  return {
+    stored,
+    threadId: locator.thread_id,
+    messageId: locator.message_id,
+    thread,
+    message,
+    headers: headerIndex(message.payload?.headers),
+  };
+}
+
+async function refreshRefsFromGmailResponse(
+  account: MailAccount,
+  context: ProviderContext,
+  response: GmailMessageReference,
+): Promise<{ thread_ref: string | null; message_ref: string | null }> {
+  const threadId = response.threadId ?? null;
+  if (threadId) {
+    await fetchAndPersistGmailThread(account, context, threadId);
+  }
+
+  const threadRef =
+    threadId
+      ? context.db.findEntityRefByProviderKey("thread", account.account_id, gmailThreadProviderKey(threadId)) ?? null
+      : null;
+  const messageRef =
+    response.id
+      ? context.db.findEntityRefByProviderKey("message", account.account_id, gmailMessageProviderKey(response.id)) ?? null
+      : null;
+
+  if (threadRef && !messageRef) {
+    const latest = latestStoredThreadMessage(threadRef, context);
+    return {
+      thread_ref: threadRef,
+      message_ref: latest.message_ref,
+    };
+  }
+
+  return {
+    thread_ref: threadRef,
+    message_ref: messageRef,
+  };
+}
+
 async function fetchGmailThreads(
   account: MailAccount,
   context: ProviderContext,
@@ -629,6 +922,36 @@ async function fetchGmailThreads(
   const normalized = await Promise.all(hydrated.map((thread) => normalizeGmailThread(account, context, thread)));
   const summarized = await maybeSummarizeThreads(normalized, context);
   return persistThreads(account, context, summarized);
+}
+
+async function sendOrDraftGmailMessage(
+  account: MailAccount,
+  context: ProviderContext,
+  payload: {
+    raw: string;
+    threadId?: string | null;
+    draft: boolean;
+  },
+): Promise<{ status: SendResultEnvelope["status"]; refs: { thread_ref: string | null; message_ref: string | null } }> {
+  if (payload.draft) {
+    const draft = await createGmailDraft(account, context, {
+      raw: payload.raw,
+      threadId: payload.threadId ?? null,
+    });
+    return {
+      status: "drafted",
+      refs: await refreshRefsFromGmailResponse(account, context, draft.message ?? {}),
+    };
+  }
+
+  const message = await sendGmailRawMessage(account, context, {
+    raw: payload.raw,
+    threadId: payload.threadId ?? null,
+  });
+  return {
+    status: "sent",
+    refs: await refreshRefsFromGmailResponse(account, context, message),
+  };
 }
 
 export class GmailApiAdapter implements MailProviderAdapter {
@@ -848,31 +1171,320 @@ export class GmailApiAdapter implements MailProviderAdapter {
     notImplemented("Gmail RSVP is deferred pending explicit Google Calendar integration.", account.name);
   }
 
-  async sendMessage(account: MailAccount, _input: SendMessageInput): Promise<SendResultEnvelope> {
-    notImplemented("Gmail send is not wired yet.", account.name);
+  async sendMessage(
+    account: MailAccount,
+    input: SendMessageInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const recipients = {
+      to: normalizeEmailList(input.to),
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+    };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("invalid_argument", "Gmail send requires at least one --to recipient.", {
+        account: account.name,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const raw = encodeMimeBase64Url(
+      buildRawMimeMessage({
+        from: account.email,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
+        subject: input.subject,
+        body: input.body,
+      }),
+    );
+
+    const result = await sendOrDraftGmailMessage(account, context, {
+      raw,
+      draft: input.draft,
+    });
+
+    return buildSendEnvelope(
+      account,
+      "send",
+      result.status,
+      input.subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      null,
+    );
   }
 
-  async reply(account: MailAccount, _messageRef: string, _input: ReplyInput): Promise<SendResultEnvelope> {
-    notImplemented("Gmail reply is not wired yet.", account.name);
+  async reply(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const target = await resolveGmailMessageContext(account, messageRef, context);
+    const selfEmail = account.email.trim().toLowerCase();
+    const replyTo = parseMailbox(target.headers["reply-to"]);
+    const from = parseMailbox(target.headers.from);
+    let to = normalizeEmailList([replyTo?.email, from?.email]).filter((email) => email.trim().toLowerCase() !== selfEmail);
+    if (to.length === 0) {
+      to = normalizeEmailList(
+        parseMailboxes(target.headers.to)
+          .map((mailbox) => mailbox.email)
+          .filter((email) => email.trim().toLowerCase() !== selfEmail),
+      );
+    }
+    const recipients = {
+      to,
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+    };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose a reply target.`, {
+        account: account.name,
+        messageRef,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const originalMessageId = target.headers["message-id"] ?? null;
+    const references = target.headers.references
+      ? `${target.headers.references}${originalMessageId ? ` ${originalMessageId}` : ""}`.trim()
+      : originalMessageId;
+    const subject = prefixSubject(target.stored.subject ?? target.headers.subject ?? "", "Re");
+    const raw = encodeMimeBase64Url(
+      buildRawMimeMessage({
+        from: account.email,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
+        subject,
+        body: buildReplyBody(input.body, target.stored),
+        inReplyTo: originalMessageId,
+        references,
+      }),
+    );
+
+    const result = await sendOrDraftGmailMessage(account, context, {
+      raw,
+      threadId: target.threadId,
+      draft: input.draft,
+    });
+
+    return buildSendEnvelope(
+      account,
+      "reply",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      messageRef,
+    );
   }
 
-  async replyAll(account: MailAccount, _messageRef: string, _input: ReplyInput): Promise<SendResultEnvelope> {
-    notImplemented("Gmail reply-all is not wired yet.", account.name);
+  async replyAll(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const target = await resolveGmailMessageContext(account, messageRef, context);
+    const selfEmail = account.email.trim().toLowerCase();
+    const replyTo = parseMailbox(target.headers["reply-to"]);
+    const from = parseMailbox(target.headers.from);
+    const originalTo = parseMailboxes(target.headers.to).map((mailbox) => mailbox.email);
+    const originalCc = parseMailboxes(target.headers.cc).map((mailbox) => mailbox.email);
+
+    let to = normalizeEmailList([
+      replyTo?.email && replyTo.email.trim().toLowerCase() !== selfEmail ? replyTo.email : null,
+      from?.email && from.email.trim().toLowerCase() !== selfEmail ? from.email : null,
+    ]);
+
+    if (to.length === 0) {
+      to = normalizeEmailList(originalTo.filter((email) => email.trim().toLowerCase() !== selfEmail));
+    }
+    if (to.length === 0 && from?.email) {
+      to = normalizeEmailList([from.email]);
+    }
+
+    const cc = normalizeEmailList([
+      ...originalTo.filter((email) => !to.includes(email) && email.trim().toLowerCase() !== selfEmail),
+      ...originalCc.filter((email) => !to.includes(email) && email.trim().toLowerCase() !== selfEmail),
+      ...input.cc,
+    ]);
+    const bcc = normalizeEmailList(input.bcc);
+
+    const recipients = { to, cc, bcc };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose reply-all recipients.`, {
+        account: account.name,
+        messageRef,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const originalMessageId = target.headers["message-id"] ?? null;
+    const references = target.headers.references
+      ? `${target.headers.references}${originalMessageId ? ` ${originalMessageId}` : ""}`.trim()
+      : originalMessageId;
+    const subject = prefixSubject(target.stored.subject ?? target.headers.subject ?? "", "Re");
+    const raw = encodeMimeBase64Url(
+      buildRawMimeMessage({
+        from: account.email,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
+        subject,
+        body: buildReplyBody(input.body, target.stored),
+        inReplyTo: originalMessageId,
+        references,
+      }),
+    );
+
+    const result = await sendOrDraftGmailMessage(account, context, {
+      raw,
+      threadId: target.threadId,
+      draft: input.draft,
+    });
+
+    return buildSendEnvelope(
+      account,
+      "reply-all",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      messageRef,
+    );
   }
 
-  async forward(account: MailAccount, _messageRef: string, _input: ForwardInput): Promise<SendResultEnvelope> {
-    notImplemented("Gmail forward is not wired yet.", account.name);
+  async forward(
+    account: MailAccount,
+    messageRef: string,
+    input: ForwardInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope> {
+    const target = await resolveGmailMessageContext(account, messageRef, context);
+    const recipients = {
+      to: normalizeEmailList(input.to),
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+    };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("invalid_argument", "Gmail forward requires at least one --to recipient.", {
+        account: account.name,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const subject = prefixSubject(target.stored.subject ?? target.headers.subject ?? "", "Fwd");
+    const raw = encodeMimeBase64Url(
+      buildRawMimeMessage({
+        from: account.email,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
+        subject,
+        body: buildForwardBody(input.body, target.stored),
+      }),
+    );
+
+    const result = await sendOrDraftGmailMessage(account, context, {
+      raw,
+      draft: input.draft,
+    });
+
+    return buildSendEnvelope(
+      account,
+      "forward",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      messageRef,
+    );
   }
 
-  async archive(account: MailAccount, _messageRef: string): Promise<ArchiveResultEnvelope> {
-    notImplemented("Gmail archive is not wired yet.", account.name);
+  async archive(
+    account: MailAccount,
+    messageRef: string,
+    context: ProviderContext,
+  ): Promise<ArchiveResultEnvelope> {
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
+    const target = await resolveGmailMessageContext(account, messageRef, context);
+    await modifyGmailThread(account, context, target.threadId, {
+      removeLabelIds: ["INBOX"],
+    });
+    await fetchAndPersistGmailThread(account, context, target.threadId);
+    return buildArchiveEnvelope(account, messageRef, target.stored.thread_ref);
   }
 
-  async markRead(account: MailAccount, _messageRefs: string[]): Promise<MarkMessagesResultEnvelope> {
-    notImplemented("Gmail mark-read is not wired yet.", account.name);
+  async markRead(
+    account: MailAccount,
+    messageRefs: string[],
+    context: ProviderContext,
+  ): Promise<MarkMessagesResultEnvelope> {
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
+    const touchedThreadIds = new Set<string>();
+    const updated: MarkMessagesResultEnvelope["updated"] = [];
+
+    for (const messageRef of messageRefs) {
+      const target = await resolveGmailMessageContext(account, messageRef, context);
+      await modifyGmailMessage(account, context, target.messageId, {
+        removeLabelIds: ["UNREAD"],
+      });
+      touchedThreadIds.add(target.threadId);
+      updated.push({
+        message_ref: messageRef,
+        thread_ref: target.stored.thread_ref,
+        unread: false,
+      });
+    }
+
+    for (const threadId of touchedThreadIds) {
+      await fetchAndPersistGmailThread(account, context, threadId);
+    }
+
+    return buildMarkMessagesEnvelope(account, "mark-read", updated);
   }
 
-  async markUnread(account: MailAccount, _messageRefs: string[]): Promise<MarkMessagesResultEnvelope> {
-    notImplemented("Gmail mark-unread is not wired yet.", account.name);
+  async markUnread(
+    account: MailAccount,
+    messageRefs: string[],
+    context: ProviderContext,
+  ): Promise<MarkMessagesResultEnvelope> {
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
+    const touchedThreadIds = new Set<string>();
+    const updated: MarkMessagesResultEnvelope["updated"] = [];
+
+    for (const messageRef of messageRefs) {
+      const target = await resolveGmailMessageContext(account, messageRef, context);
+      await modifyGmailMessage(account, context, target.messageId, {
+        addLabelIds: ["UNREAD"],
+      });
+      touchedThreadIds.add(target.threadId);
+      updated.push({
+        message_ref: messageRef,
+        thread_ref: target.stored.thread_ref,
+        unread: true,
+      });
+    }
+
+    for (const threadId of touchedThreadIds) {
+      await fetchAndPersistGmailThread(account, context, threadId);
+    }
+
+    return buildMarkMessagesEnvelope(account, "mark-unread", updated);
   }
 }
