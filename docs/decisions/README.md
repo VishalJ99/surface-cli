@@ -43,3 +43,5 @@ Use zero-padded sequential numbers:
 - `0019-live-e2e-stays-opt-in-and-cli-driven.md`
 - `0020-gmail-auth-uses-loopback-oauth-and-refresh-tokens.md`
 - `0021-local-config-stores-policy-not-account-state.md`
+- `0022-gmail-thread-read-path-uses-threads-list-and-threads-get.md`
+- `0023-gmail-attachment-bytes-come-from-inline-parts-or-attachments-get.md`

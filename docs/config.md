@@ -133,7 +133,7 @@ Example local-only setup:
 ```bash
 export SURFACE_WRITES_ENABLED=1
 export SURFACE_SEND_MODE=allow_send
-export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
+export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
 export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 ```
 

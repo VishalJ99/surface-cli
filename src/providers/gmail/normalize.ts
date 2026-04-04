@@ -15,23 +15,36 @@ const WINDOWS_TIMEZONE_ALIASES: Record<string, string> = {
   "Pacific Standard Time": "America/Los_Angeles",
 };
 
-interface GmailHeader {
+export interface GmailHeader {
   name?: string;
   value?: string;
 }
 
-interface GmailBody {
+export interface GmailBody {
   data?: string;
   attachmentId?: string;
+  size?: number;
 }
 
-interface GmailPart {
+export interface GmailPart {
+  partId?: string;
   mimeType?: string;
   filename?: string;
   headers?: GmailHeader[];
   body?: GmailBody;
   parts?: GmailPart[];
 }
+
+export interface GmailMessagePayload {
+  id?: string;
+  threadId?: string;
+  labelIds?: string[];
+  snippet?: string;
+  internalDate?: string;
+  payload?: GmailPart;
+}
+
+const CALENDAR_PART_MIME_TYPES = new Set(["text/calendar", "application/ics"]);
 
 function decodeEncodedWords(value: string): string {
   return value.replace(/=\?([^?]+)\?([bBqQ])\?([^?]+)\?=/g, (_match, charset, encoding, encoded) => {
@@ -413,4 +426,10 @@ export function normalizeGmailBody(payload: GmailPart | undefined | null, snippe
     text: plainBody || htmlToText(htmlBody) || snippet,
     html: htmlBody,
   };
+}
+
+export function isCalendarPart(part: GmailPart): boolean {
+  const mimeType = (part.mimeType ?? "").toLowerCase();
+  const filename = (part.filename ?? "").toLowerCase();
+  return CALENDAR_PART_MIME_TYPES.has(mimeType) || filename.endsWith(".ics");
 }

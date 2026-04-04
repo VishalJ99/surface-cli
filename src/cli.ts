@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { accountInputSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
 import { writeJson } from "./lib/json.js";
+import { toPublicThread } from "./lib/public-mail.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { resolveProviderAdapter } from "./providers/index.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
@@ -315,7 +316,7 @@ mailCommand
             limit: options.limit ?? context.config.defaultResultLimit,
             unread_only: false,
           },
-          threads,
+          threads: threads.map(toPublicThread),
         });
       },
     );
@@ -349,7 +350,7 @@ mailCommand
             limit: options.limit ?? context.config.defaultResultLimit,
             unread_only: true,
           },
-          threads,
+          threads: threads.map(toPublicThread),
         });
       },
     );

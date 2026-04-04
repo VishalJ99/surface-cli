@@ -167,7 +167,7 @@ Recommended example:
           },
           {
             "name": "Vishal Jain",
-            "email": "personal@example.com",
+            "email": "recipient@example.com",
             "role": "to"
           }
         ],
@@ -196,7 +196,7 @@ Recommended example:
             "to": [
               {
                 "name": "Vishal Jain",
-                "email": "personal@example.com"
+                "email": "recipient@example.com"
               }
             ],
             "cc": [],
@@ -277,7 +277,7 @@ Recommended example:
       "to": [
         {
           "name": "Vishal Jain",
-          "email": "personal@example.com"
+          "email": "recipient@example.com"
         }
       ],
       "cc": [],
@@ -437,19 +437,19 @@ Recommended example:
     "to": [
       {
         "name": "Jain, Vishal",
-        "email": "sink@example.com"
+        "email": "sender@example.com"
       }
     ],
     "cc": [
       {
-        "name": "personal@example.com",
-        "email": "personal@example.com"
+        "name": "recipient@example.com",
+        "email": "recipient@example.com"
       }
     ],
     "bcc": [
       {
-        "name": "work@example.com",
-        "email": "work@example.com"
+        "name": "observer@example.com",
+        "email": "observer@example.com"
       }
     ]
   },
@@ -478,7 +478,7 @@ Recommended example:
     "to": [
       {
         "name": "Jain, Vishal",
-        "email": "sink@example.com"
+        "email": "sender@example.com"
       }
     ],
     "cc": [],
@@ -509,7 +509,7 @@ Recommended example:
     "to": [
       {
         "name": "Jain, Vishal",
-        "email": "sink@example.com"
+        "email": "sender@example.com"
       }
     ],
     "cc": [],
@@ -540,8 +540,8 @@ Recommended example:
     "to": [],
     "cc": [
       {
-        "name": "personal@example.com",
-        "email": "personal@example.com"
+        "name": "recipient@example.com",
+        "email": "recipient@example.com"
       }
     ],
     "bcc": []
@@ -570,20 +570,20 @@ Recommended example:
   "recipients": {
     "to": [
       {
-        "name": "personal@example.com",
-        "email": "personal@example.com"
+        "name": "recipient@example.com",
+        "email": "recipient@example.com"
       }
     ],
     "cc": [
       {
         "name": "Jain, Vishal",
-        "email": "sink@example.com"
+        "email": "sender@example.com"
       }
     ],
     "bcc": [
       {
-        "name": "work@example.com",
-        "email": "work@example.com"
+        "name": "observer@example.com",
+        "email": "observer@example.com"
       }
     ]
   },

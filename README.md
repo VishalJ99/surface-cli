@@ -72,6 +72,7 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - adapter registry for `gmail-api` and `outlook-web-playwright`
 - donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
 - Gmail OAuth login wired to Google desktop-app OAuth with stored refresh tokens under `~/.surface-cli/auth/<account_id>/gmail-token.json`
+- live Gmail `fetch-unread`, `search`, `read`, `attachment list`, and `attachment download`
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
 - live Outlook `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - summary backends for `openrouter` and `openclaw`
@@ -79,7 +80,7 @@ The repo now contains a working TypeScript scaffold under `src/`:
 
 What is still intentionally incomplete:
 
-- Gmail `search`, `fetch-unread`, `read`, and attachments
+- Gmail write actions, `--draft`, and RSVP
 - draft lifecycle commands
 - move / delete
 - broader automated coverage beyond the opt-in Outlook v1 e2e script and cache-prune policy
@@ -89,7 +90,7 @@ For Gmail auth:
 - place a Google desktop OAuth client secret at `./client_secret.json` or set
   `SURFACE_GMAIL_CLIENT_SECRET_FILE`
 - add the account first:
-  - `surface account add personal --provider gmail --transport gmail-api --email you@gmail.com`
+  - `surface account add personal --provider gmail --transport gmail-api --email you@example.com`
 - run:
   - `surface auth login personal`
 - on a remote host, forward the callback port first:
@@ -118,7 +119,7 @@ For the live Outlook v1 e2e script:
 
 ```bash
 export SURFACE_E2E_ENABLE=1
-export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
+export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
 export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 npm run e2e:outlook-v1
 ```
@@ -128,7 +129,7 @@ For live write-path testing, also set:
 ```bash
 export SURFACE_WRITES_ENABLED=1
 export SURFACE_SEND_MODE=allow_send
-export SURFACE_TEST_RECIPIENTS='sink@example.com,personal@example.com,work@example.com'
+export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
 export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
 ```
 
