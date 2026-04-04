@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
@@ -50,6 +50,37 @@ export interface ConfigLoadOptions {
 
 export function defaultConfigPath(): string {
   return resolve(homedir(), ".surface-cli", "config.toml");
+}
+
+function defaultConfigTemplate(): string {
+  return [
+    "# Surface CLI local config",
+    "#",
+    "# This file stores local policy and preference knobs only.",
+    "# Account registry and auth state live in SQLite plus ~/.surface-cli/auth/.",
+    "",
+    "cache_dir = \"~/.surface-cli\"",
+    "default_result_limit = 50",
+    "provider_timeout_ms = 30000",
+    "summary_input_max_bytes = 16384",
+    "summarizer_backend = \"none\"",
+    "summarizer_model = \"openai/gpt-4o-mini\"",
+    "summarizer_timeout_ms = 20000",
+    "writes_enabled = false",
+    "send_mode = \"draft_only\"",
+    "test_recipients = []",
+    "test_account_allowlist = []",
+    "",
+  ].join("\n");
+}
+
+function ensureConfigFileExists(configPath: string): void {
+  if (existsSync(configPath)) {
+    return;
+  }
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, defaultConfigTemplate(), "utf8");
 }
 
 function expandHomePath(value: string): string {
@@ -112,6 +143,7 @@ export function loadConfig(options: ConfigLoadOptions = {}): {
   configPath: string;
 } {
   const configPath = expandHomePath(options.configPath ?? process.env.SURFACE_CONFIG_PATH ?? defaultConfigPath());
+  ensureConfigFileExists(configPath);
 
   let fileConfig: z.infer<typeof fileConfigSchema> = {};
   try {

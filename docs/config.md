@@ -21,6 +21,9 @@ Suggested default path:
 ~/.surface-cli/config.toml
 ```
 
+Surface should create this file automatically when missing. It is for local policy and
+preferences only, not account registry or auth state.
+
 ## V1 Global Settings
 
 ### Storage
@@ -154,3 +157,4 @@ Current write-path behavior:
 - storing provider secrets directly in the config file
 - defining truncation configuration before truncation is implemented
 - defining provider-specific draft lifecycle commands before the first `--draft` implementation lands
+- mirroring account add/remove/auth state into `config.toml`

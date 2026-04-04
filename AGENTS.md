@@ -64,11 +64,21 @@ Do not invent behavior that conflicts with these docs.
 - Write actions must remain draft-first unless explicit send behavior is both implemented and locally enabled.
 - Do not hardcode real personal email addresses into the public repo for testing.
 - Use local-only config or environment variables for test recipients and write-action allowlists.
+- Prefer `~/.surface-cli/config.toml` as the durable local policy source for outbound test recipients.
+- If `test_recipients` is configured locally, treat it as the only allowed outbound sink for send-like tests.
+- If local config is absent or intentionally overridden, read the outbound sink from `SURFACE_TEST_RECIPIENTS`.
+- Never infer test recipients from docs, chat history, or ad hoc mailbox contents when a local config/env value exists.
 - Autonomous send tests must only target recipients on the configured allowlist.
-- Autonomous test messages should use a clear subject prefix such as `[surface-test]`.
 - Prefer self-addressed or sink-mailbox tests over third-party recipients.
 - When testing writes, record the created draft or sent message refs in the final response so cleanup is possible.
 - If write safety configuration is missing, do not send mail. Draft creation may still be acceptable if the current task requires it.
+
+For this repo, account and auth state are not stored in `config.toml`.
+Agents should read:
+
+- account identity from `surface account list` or SQLite state
+- auth material from `~/.surface-cli/auth/`
+- local outbound-test policy from `~/.surface-cli/config.toml` and relevant env vars
 
 ## Documentation Rules
 

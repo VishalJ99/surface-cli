@@ -42,3 +42,4 @@ Use zero-padded sequential numbers:
 - `0018-outlook-read-state-uses-absolute-rest-patch.md`
 - `0019-live-e2e-stays-opt-in-and-cli-driven.md`
 - `0020-gmail-auth-uses-loopback-oauth-and-refresh-tokens.md`
+- `0021-local-config-stores-policy-not-account-state.md`
