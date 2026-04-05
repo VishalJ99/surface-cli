@@ -90,6 +90,19 @@ When changing public behavior:
 
 Do not leave important design decisions only in commits, Linear tickets, or chat history.
 
+## Release Notes
+
+- Keep npm package release steps concise and repo-specific in this file; do not copy generic ClawHub docs here.
+- The publish order for Surface is:
+  1. update `skills/surface-cli/SKILL.md` if the skill text changed
+  2. bump `package.json` and `package-lock.json` if shipping a new npm version
+  3. publish npm first when the skill install metadata points at `surface-cli`
+  4. publish the skill folder with `clawhub publish ./skills/surface-cli --slug surface-cli --version <version> ...`
+- ClawHub publishes the skill folder and `SKILL.md` together. There is no separate skill metadata upload step.
+- After a ClawHub publish, verify both:
+  - `clawhub inspect surface-cli --json`
+  - `clawhub inspect surface-cli --file SKILL.md`
+
 ## ADR Rules
 
 Create or update an ADR when changing:
