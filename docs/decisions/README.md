@@ -48,3 +48,4 @@ Use zero-padded sequential numbers:
 - `0024-gmail-compose-uses-raw-mime-send-and-drafts-create.md`
 - `0025-gmail-archive-and-read-state-use-label-mutations.md`
 - `0026-gmail-rsvp-is-deferred-to-calendar-integration.md`
+- `0027-remote-auth-uses-one-cli-flag-with-provider-specific-behavior.md`

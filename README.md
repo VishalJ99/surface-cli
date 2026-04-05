@@ -93,21 +93,25 @@ For Gmail auth:
   - `surface account add personal --provider gmail --transport gmail-api --email you@example.com`
 - run:
   - `surface auth login personal`
-- on a remote host, forward the callback port first:
+- for remote auth on a headless host, use:
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 <host>
-surface auth login personal
+surface auth login personal --remote-host <host>
 ```
 
-Surface prints the Google auth URL to `stderr`. Open it in a browser on the machine where
-`localhost:8765` is forwarded to the Surface host.
+Surface starts the SSH loopback forward first, then prints the Google auth URL to `stderr`.
+Open it in a browser on the local machine running the command.
 
 For Outlook auth:
 
 - `surface auth login <account>` opens Chrome against the account profile directory
+- `surface auth login <account> --remote-host <host>` opens Chrome locally in a dedicated
+  Surface Chrome profile, then syncs that profile to the remote host and validates it there
 - `surface auth status [account]` probes Outlook headlessly and reports whether the profile lands in the mailbox or a sign-in flow
 - `surface auth logout <account>` clears the stored Outlook profile for that account
+- remote auth login assumes the named account already exists on the remote host
+- remote auth login only warns before replacement when the remote account currently reports
+  `status = "authenticated"`
 
 If Chrome is installed in a non-default location, set:
 

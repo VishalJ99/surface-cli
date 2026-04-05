@@ -19,7 +19,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface account add <name> --provider <provider> --transport <transport> --email <email>`
 - `surface account list`
 - `surface account remove <account>`
-- `surface auth login <account>`
+- `surface auth login <account> [--remote-host <host>]`
 - `surface auth status [account]`
 - `surface auth logout <account>`
 
@@ -27,12 +27,43 @@ Gmail auth notes:
 
 - `surface auth login <account>` for `gmail-api` uses a loopback OAuth flow and prints the Google
   authorization URL to `stderr`
+- `surface auth login <account> --remote-host <host>` keeps the same public command but changes the
+  transport details:
+  - Gmail starts an SSH port-forward to the remote host first, then runs the remote loopback OAuth
+    flow so the callback lands on the remote Surface process
+  - Outlook performs local browser login in a dedicated Surface Chrome profile, then syncs that
+    profile to the remote account auth path and validates it remotely
+- Remote auth login assumes the named account already exists on the remote host
+- Remote auth login only warns before replacement when the remote account currently reports
+  `status = "authenticated"`
 - Gmail auth resolves desktop OAuth credentials from:
   - `SURFACE_GMAIL_CLIENT_SECRET_FILE`
   - the stored per-account copy under `~/.surface-cli/auth/<account_id>/client_secret.json`
   - `./client_secret.json` in the current working directory
 - Gmail auth stores refresh-token state under:
   - `~/.surface-cli/auth/<account_id>/gmail-token.json`
+
+Remote auth login returns the normal `auth-login` envelope plus:
+
+- `remote_host`
+  Present only when `--remote-host <host>` was used.
+
+Example remote auth login result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "auth-login",
+  "account": "personal",
+  "provider": "gmail",
+  "transport": "gmail-api",
+  "remote_host": "dross",
+  "status": {
+    "status": "authenticated",
+    "detail": "Authenticated as you@example.com."
+  }
+}
+```
 
 ### Mail
 

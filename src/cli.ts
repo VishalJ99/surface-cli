@@ -8,6 +8,7 @@ import { accountInputSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
+import { runRemoteAuthLogin } from "./lib/remote-auth.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { resolveProviderAdapter } from "./providers/index.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
@@ -209,7 +210,15 @@ const authCommand = program.command("auth").description("Manage provider authent
 authCommand
   .command("login")
   .argument("<account>", "Logical account name")
-  .action(async (accountName: string, _options, command: Command) => {
+  .option("--remote-host <host>", "Run auth login against an existing Surface account on a remote host")
+  .action(async (accountName: string, options, command: Command) => {
+    if (options.remoteHost) {
+      await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
+        writeJson(await runRemoteAuthLogin(context, accountName, options.remoteHost));
+      });
+      return;
+    }
+
     await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
       const adapter = resolveProviderAdapter(context.account);
       const status = await adapter.login(context.account, context);

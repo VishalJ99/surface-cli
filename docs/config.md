@@ -118,12 +118,28 @@ Gmail auth runtime requirements:
 For headless remote setup, the expected pattern is:
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 <host>
-surface auth login <gmail-account>
+surface auth login <gmail-account> --remote-host <host>
 ```
 
-Then open the printed Google auth URL in a browser on the machine where `localhost:8765`
-is forwarded back to the Surface host.
+Surface starts the SSH port-forward for you before the OAuth approval URL is printed.
+
+For Outlook headless remote setup, use the same public command:
+
+```bash
+surface auth login <outlook-account> --remote-host <host>
+```
+
+That path launches local Chrome in a dedicated Surface profile, waits for the user to finish
+Microsoft sign-in locally, then syncs the resulting profile to the remote host and validates it
+with `surface auth status <account>` there.
+
+Shared remote-auth behavior:
+
+- the account must already exist on the remote host
+- if the remote account currently reports `status = "authenticated"`, Surface warns before
+  replacing the remote auth state
+- if the remote account is missing auth state or reports `status = "unauthenticated"`, Surface
+  proceeds without an overwrite warning
 
 For a public repo, prefer local environment variables for write safety instead of
 committing real recipient addresses into tracked files.
