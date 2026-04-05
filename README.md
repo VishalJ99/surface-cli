@@ -108,6 +108,22 @@ The correct split is:
   such as summarizer and write-safety settings
 - account registry and auth state do not live in `config.toml`
 
+### Install Surface
+
+For development from a checkout:
+
+```bash
+npm install
+npm run build
+npm link
+```
+
+For a published install, use npm:
+
+```bash
+npm install -g surface-cli
+```
+
 ### Standard Single-Machine Setup
 
 Use this when the same machine can:
@@ -254,4 +270,38 @@ npm install
 npm run check
 npm run build
 npm run surface -- --help
+```
+
+## Publish To ClawHub
+
+ClawHub publishes the skill folder, not the whole repo. The publish unit is:
+
+```text
+skills/surface-cli/
+  SKILL.md
+```
+
+Recommended release order:
+
+1. publish the CLI package to npm so ClawHub can install `surface`
+2. log into ClawHub
+3. publish the skill folder
+
+Example:
+
+```bash
+npm publish
+clawhub login
+clawhub publish ./skills/surface-cli \
+  --slug surface-cli \
+  --name "Surface CLI" \
+  --version 0.1.0 \
+  --changelog "Initial Surface CLI skill release"
+```
+
+Before publishing, verify the package payload:
+
+```bash
+npm pack --dry-run
+openclaw skills info surface-cli
 ```

@@ -1,13 +1,33 @@
 ---
 name: surface-cli
-description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when handling multi-account email from the terminal: listing accounts, checking auth, fetching unread threads, searching mail, reading by message_ref, downloading attachments, sending or drafting mail, archiving, marking read or unread, and RSVP on Outlook. Use refs returned by Surface, not positional indexes into old JSON."
-metadata: {"openclaw":{"emoji":"📬","homepage":"https://github.com/VishalJ99/surface-cli","requires":{"bins":["surface"]}}}
+description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP or require admin setup, plus stable refs for unread fetch, search, read, attachments, send or draft, archive, mark read or unread, and Outlook RSVP."
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📬",
+        "homepage": "https://github.com/VishalJ99/surface-cli",
+        "requires": { "bins": ["surface"] },
+        "install":
+          [
+            {
+              "id": "node",
+              "kind": "node",
+              "package": "surface-cli",
+              "bins": ["surface"],
+              "label": "Install Surface CLI (npm)",
+            },
+          ],
+      },
+  }
 ---
 
 # Surface CLI
 
-Surface is a local-first mail CLI for Gmail and Outlook. It prints machine-readable JSON to
-stdout and stores local state in `~/.surface-cli`.
+Surface is a local-first mail CLI for Gmail and Outlook. It is especially useful for Outlook
+school or work accounts that only work through the web UI and do not require IMAP or admin
+changes. Surface prints machine-readable JSON to stdout and stores local state in
+`~/.surface-cli`.
 
 ## Use This Skill When
 

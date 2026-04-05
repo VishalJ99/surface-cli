@@ -1,16 +1,40 @@
 {
   "name": "surface-cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "A lean, local-first mail CLI for Gmail and Outlook with a JSON-first contract for automation.",
+  "homepage": "https://github.com/VishalJ99/surface-cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VishalJ99/surface-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VishalJ99/surface-cli/issues"
+  },
+  "keywords": [
+    "cli",
+    "email",
+    "gmail",
+    "outlook",
+    "automation",
+    "openclaw"
+  ],
   "type": "module",
   "bin": {
     "surface": "dist/cli.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "tsx src/cli.ts",
     "surface": "tsx src/cli.ts",
+    "prepack": "npm run build",
     "e2e:outlook-v1": "tsx src/e2e/outlook-v1.ts",
     "e2e:gmail-v1": "tsx src/e2e/gmail-v1.ts"
   },
