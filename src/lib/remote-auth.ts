@@ -61,6 +61,15 @@ function shellPath(value: string): string {
   return shellEscape(value);
 }
 
+function remoteLoginShellWrapper(command: string): string {
+  const escapedCommand = shellEscape(command);
+  return [
+    `if [ -x /bin/zsh ]; then exec /bin/zsh -lc ${escapedCommand}; fi`,
+    `if [ -x /bin/bash ]; then exec /bin/bash -lc ${escapedCommand}; fi`,
+    `exec /bin/sh -lc ${escapedCommand}`,
+  ].join("; ");
+}
+
 function surfaceRemoteInvoker(surfaceArgs: string[], env: Record<string, string> = {}): string {
   const envPrefix = Object.entries(env)
     .map(([key, value]) => `${key}=${shellEscape(value)}`)
@@ -86,7 +95,7 @@ function extractJsonEnvelope(rawOutput: string): string {
 
 async function runRemoteShell(remoteHost: string, command: string): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await execFileAsync("ssh", ["-T", remoteHost, "sh", "-lc", command], {
+    return await execFileAsync("ssh", ["-T", remoteHost, remoteLoginShellWrapper(command)], {
       timeout: SSH_TIMEOUT_MS,
       maxBuffer: SSH_MAX_BUFFER,
     });
@@ -376,7 +385,7 @@ async function runRemoteSurfaceStreaming(
   env: Record<string, string> = {},
 ): Promise<string> {
   return await new Promise<string>((resolvePromise, rejectPromise) => {
-    const child = spawn("ssh", ["-T", remoteHost, "sh", "-lc", surfaceRemoteInvoker(args, env)], {
+    const child = spawn("ssh", ["-T", remoteHost, remoteLoginShellWrapper(surfaceRemoteInvoker(args, env))], {
       stdio: ["inherit", "pipe", "pipe"],
     });
 
