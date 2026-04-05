@@ -70,19 +70,6 @@ function remoteLoginShellWrapper(command: string): string {
   ].join("; ");
 }
 
-function surfaceRemoteInvoker(surfaceArgs: string[], env: Record<string, string> = {}): string {
-  const envPrefix = Object.entries(env)
-    .map(([key, value]) => `${key}=${shellEscape(value)}`)
-    .join(" ");
-  const escapedArgs = surfaceArgs.map(shellEscape).join(" ");
-
-  return [
-    'PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"',
-    'if command -v surface >/dev/null 2>&1; then SURFACE_BIN="$(command -v surface)"; elif [ -x /opt/homebrew/bin/surface ]; then SURFACE_BIN=/opt/homebrew/bin/surface; elif [ -x /usr/local/bin/surface ]; then SURFACE_BIN=/usr/local/bin/surface; else echo "surface CLI not found on remote host." >&2; exit 127; fi',
-    `${envPrefix ? `${envPrefix} ` : ""}"$SURFACE_BIN" ${escapedArgs}`,
-  ].join("; ");
-}
-
 function extractJsonEnvelope(rawOutput: string): string {
   const trimmed = rawOutput.trim();
   const start = trimmed.indexOf("{");
@@ -91,6 +78,19 @@ function extractJsonEnvelope(rawOutput: string): string {
     return trimmed.slice(start, end + 1);
   }
   return trimmed;
+}
+
+function remoteSurfaceExecArgs(
+  remoteHost: string,
+  args: string[],
+  env: Record<string, string> = {},
+): string[] {
+  const execEnv = [
+    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    ...Object.entries(env).map(([key, value]) => `${key}=${value}`),
+  ];
+
+  return ["-T", remoteHost, "/usr/bin/env", ...execEnv, "surface", ...args];
 }
 
 async function runRemoteShell(remoteHost: string, command: string): Promise<{ stdout: string; stderr: string }> {
@@ -108,12 +108,31 @@ async function runRemoteShell(remoteHost: string, command: string): Promise<{ st
   }
 }
 
+async function runRemoteSurfaceProcess(
+  remoteHost: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execFileAsync("ssh", remoteSurfaceExecArgs(remoteHost, args, env), {
+      timeout: SSH_TIMEOUT_MS,
+      maxBuffer: SSH_MAX_BUFFER,
+    });
+  } catch (error) {
+    const failure = error as Error & { stderr?: string; stdout?: string };
+    throw new SurfaceError(
+      "remote_command_failed",
+      `Remote surface ${args.join(" ")} on '${remoteHost}' failed: ${failure.stderr?.trim() || failure.message}`,
+    );
+  }
+}
+
 async function runRemoteSurfaceJson<T>(
   remoteHost: string,
   args: string[],
   env: Record<string, string> = {},
 ): Promise<T> {
-  const result = await runRemoteShell(remoteHost, surfaceRemoteInvoker(args, env));
+  const result = await runRemoteSurfaceProcess(remoteHost, args, env);
   try {
     return JSON.parse(extractJsonEnvelope(result.stdout)) as T;
   } catch (error) {
@@ -385,7 +404,7 @@ async function runRemoteSurfaceStreaming(
   env: Record<string, string> = {},
 ): Promise<string> {
   return await new Promise<string>((resolvePromise, rejectPromise) => {
-    const child = spawn("ssh", ["-T", remoteHost, remoteLoginShellWrapper(surfaceRemoteInvoker(args, env))], {
+    const child = spawn("ssh", remoteSurfaceExecArgs(remoteHost, args, env), {
       stdio: ["inherit", "pipe", "pipe"],
     });
 
