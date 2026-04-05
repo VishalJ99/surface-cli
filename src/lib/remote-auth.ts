@@ -25,6 +25,8 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_GMAIL_CALLBACK_PORT = 8765;
 const SSH_TIMEOUT_MS = 30_000;
 const SSH_MAX_BUFFER = 1024 * 1024;
+const REMOTE_AUTH_PREFLIGHT_TIMEOUT_MS = 8_000;
+const REMOTE_AUTH_VALIDATE_TIMEOUT_MS = 20_000;
 
 interface RemoteAccountListEnvelope {
   accounts: MailAccount[];
@@ -112,10 +114,11 @@ async function runRemoteSurfaceProcess(
   remoteHost: string,
   args: string[],
   env: Record<string, string> = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   try {
     return await execFileAsync("ssh", remoteSurfaceExecArgs(remoteHost, args, env), {
-      timeout: SSH_TIMEOUT_MS,
+      timeout: options.timeoutMs ?? SSH_TIMEOUT_MS,
       maxBuffer: SSH_MAX_BUFFER,
     });
   } catch (error) {
@@ -131,14 +134,26 @@ async function runRemoteSurfaceJson<T>(
   remoteHost: string,
   args: string[],
   env: Record<string, string> = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
-  const result = await runRemoteSurfaceProcess(remoteHost, args, env);
   try {
+    const result = await runRemoteSurfaceProcess(remoteHost, args, env, options);
     return JSON.parse(extractJsonEnvelope(result.stdout)) as T;
   } catch (error) {
+    const failure = error as Error & { stdout?: string };
+    if (typeof failure.stdout === "string" && failure.stdout.trim()) {
+      try {
+        return JSON.parse(extractJsonEnvelope(failure.stdout)) as T;
+      } catch {
+        // fall through to the normalized error below
+      }
+    }
+
     throw new SurfaceError(
       "remote_command_failed",
-      `Remote surface ${args.join(" ")} on '${remoteHost}' returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      error instanceof Error
+        ? error.message
+        : `Remote surface ${args.join(" ")} on '${remoteHost}' returned invalid JSON.`,
     );
   }
 }
@@ -156,9 +171,31 @@ async function resolveRemoteAccount(remoteHost: string, accountName: string): Pr
   return account;
 }
 
-async function resolveRemoteAuthStatus(remoteHost: string, accountName: string): Promise<AuthStatus> {
-  const payload = await runRemoteSurfaceJson<RemoteAuthStatusEnvelope>(remoteHost, ["auth", "status", accountName]);
-  return payload.status;
+async function resolveRemoteAuthStatus(
+  remoteHost: string,
+  accountName: string,
+  options: { timeoutMs?: number; bestEffort?: boolean } = {},
+): Promise<AuthStatus> {
+  try {
+    const payload = await runRemoteSurfaceJson<RemoteAuthStatusEnvelope>(
+      remoteHost,
+      ["auth", "status", accountName],
+      {},
+      options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {},
+    );
+    return payload.status;
+  } catch (error) {
+    if (options.bestEffort) {
+      return {
+        status: "unknown",
+        detail:
+          error instanceof Error
+            ? `Remote auth status probe failed: ${error.message}`
+            : "Remote auth status probe failed.",
+      };
+    }
+    throw error;
+  }
 }
 
 async function promptForRemoteReplacement(
@@ -530,7 +567,10 @@ async function runRemoteOutlookLogin(
   await ensureRemoteDirectory(remoteHost, remoteProfileDir);
   await syncPathToRemote(`${localProfileDir}/`, remoteHost, `${remoteProfileDir}/`, { delete: true });
 
-  const remoteStatus = await resolveRemoteAuthStatus(remoteHost, account.name);
+  const remoteStatus = await resolveRemoteAuthStatus(remoteHost, account.name, {
+    timeoutMs: REMOTE_AUTH_VALIDATE_TIMEOUT_MS,
+    bestEffort: true,
+  });
   return {
     schema_version: "1",
     command: "auth-login",
@@ -548,7 +588,10 @@ export async function runRemoteAuthLogin(
   remoteHost: string,
 ): Promise<RemoteAuthLoginEnvelope> {
   const remoteAccount = await resolveRemoteAccount(remoteHost, accountName);
-  const remoteStatus = await resolveRemoteAuthStatus(remoteHost, accountName);
+  const remoteStatus = await resolveRemoteAuthStatus(remoteHost, accountName, {
+    timeoutMs: REMOTE_AUTH_PREFLIGHT_TIMEOUT_MS,
+    bestEffort: true,
+  });
   await promptForRemoteReplacement(remoteHost, remoteAccount, remoteStatus);
 
   if (remoteAccount.provider === "gmail" && remoteAccount.transport === "gmail-api") {

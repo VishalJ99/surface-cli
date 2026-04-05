@@ -39,6 +39,10 @@ Shared rules:
   `status = "authenticated"`
 - if the remote account is missing auth state or reports `status = "unauthenticated"`,
   proceed without an overwrite warning
+- if the remote auth-state probe times out or fails, treat it as best-effort:
+  - do not block the remote auth flow just to decide whether to warn
+  - proceed without an overwrite warning
+  - return `status = "unknown"` if post-sync validation cannot complete
 
 Remote orchestration lives at the CLI layer rather than the provider-adapter interface.
 

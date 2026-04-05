@@ -150,6 +150,8 @@ In this mode:
 - install Surface locally too if you want to use `--remote-host` auth helpers
 - `--remote-host` assumes the named account already exists on the remote machine
 - remote auth only warns before replacement when the remote account already reports `authenticated`
+- if the remote auth-state probe times out or fails, Surface proceeds without an overwrite warning
+  instead of blocking the remote auth flow
 
 #### Gmail On A Headless Remote Host
 
