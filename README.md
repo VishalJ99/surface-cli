@@ -85,7 +85,45 @@ What is still intentionally incomplete:
 - move / delete
 - broader automated coverage beyond the opt-in provider v1 e2e scripts and cache-prune policy
 
-For Gmail auth:
+## Setup
+
+Surface supports two setup modes:
+
+- standard single-machine setup
+  Surface runs on the same machine where you can access the browser, localhost callback ports,
+  and any required GUI prompts
+- headless remote setup
+  Surface runs on a remote machine such as a Mac mini, while a second local machine helps with
+  Gmail OAuth browser approval or Outlook browser-profile bootstrap
+
+The correct split is:
+
+- the machine that actually runs `surface` for day-to-day mail work is the canonical Surface host
+- that host owns:
+  - `~/.surface-cli/state.db`
+  - `~/.surface-cli/auth/`
+  - `~/.surface-cli/cache/`
+  - `~/.surface-cli/downloads/`
+- `~/.surface-cli/config.toml` is auto-created on first run and stores local policy only
+  such as summarizer and write-safety settings
+- account registry and auth state do not live in `config.toml`
+
+### Standard Single-Machine Setup
+
+Use this when the same machine can:
+
+- open Chrome locally
+- receive loopback OAuth callbacks on `localhost`
+- show any required Microsoft or Google auth UI
+
+Typical flow:
+
+1. install Surface on that machine
+2. add accounts there
+3. run `surface auth login <account>` there
+4. use that same machine for normal `surface mail ...` commands
+
+Gmail:
 
 - place a Google desktop OAuth client secret at `./client_secret.json` or set
   `SURFACE_GMAIL_CLIENT_SECRET_FILE`
@@ -93,25 +131,70 @@ For Gmail auth:
   - `surface account add personal --provider gmail --transport gmail-api --email you@example.com`
 - run:
   - `surface auth login personal`
-- for remote auth on a headless host, use:
-
-```bash
-surface auth login personal --remote-host <host>
-```
-
-Surface starts the SSH loopback forward first, then prints the Google auth URL to `stderr`.
-Open it in a browser on the local machine running the command.
 
 For Outlook auth:
 
 - `surface auth login <account>` opens Chrome against the account profile directory
-- `surface auth login <account> --remote-host <host>` opens Chrome locally in a dedicated
-  Surface Chrome profile, then syncs that profile to the remote host and validates it there
 - `surface auth status [account]` probes Outlook headlessly and reports whether the profile lands in the mailbox or a sign-in flow
 - `surface auth logout <account>` clears the stored Outlook profile for that account
-- remote auth login assumes the named account already exists on the remote host
-- remote auth login only warns before replacement when the remote account currently reports
-  `status = "authenticated"`
+
+### Headless Remote Setup
+
+Use this when your real Surface host is remote, for example a headless Mac mini, VM, or server.
+
+In this mode:
+
+- install Surface on the remote machine first
+- add accounts on the remote machine first
+- the remote machine is the source of truth for all Surface state
+- install Surface locally too if you want to use `--remote-host` auth helpers
+- `--remote-host` assumes the named account already exists on the remote machine
+- remote auth only warns before replacement when the remote account already reports `authenticated`
+
+#### Gmail On A Headless Remote Host
+
+The remote host is the real Surface runtime. Your local machine is only a browser helper.
+
+1. on the remote host, install Surface and add the Gmail account
+2. on the local machine, ensure `surface` is installed too
+3. on the local machine, run:
+
+```bash
+surface auth login <gmail-account> --remote-host <ssh-host>
+```
+
+What happens:
+
+- Surface starts SSH port forwarding first
+- Surface runs the Gmail OAuth listener on the remote host
+- you open the Google auth URL locally
+- the OAuth callback is forwarded back to the remote host
+- the refresh token is stored on the remote host under `~/.surface-cli/auth/<account_id>/`
+
+#### Outlook On A Headless Remote Host
+
+The remote host is again the real Surface runtime. Your local machine is only an auth/bootstrap
+helper.
+
+1. on the remote host, install Surface and add the Outlook account
+2. on the local machine, ensure `surface` is installed too
+3. on the local machine, run:
+
+```bash
+surface auth login <outlook-account> --remote-host <ssh-host>
+```
+
+What happens:
+
+- Surface opens local Chrome in a dedicated Surface profile
+- you complete the Microsoft sign-in locally
+- Surface syncs that profile to the remote host
+- Surface validates the copied profile on the remote host with `surface auth status <account>`
+
+This is why headless remote auth currently requires `surface` to exist on both machines:
+
+- local machine: helper for browser/UI work
+- remote machine: canonical Surface runtime and state owner
 
 If Chrome is installed in a non-default location, set:
 
