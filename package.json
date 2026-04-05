@@ -1,6 +1,6 @@
 {
   "name": "surface-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A lean, local-first mail CLI for Gmail and Outlook with a JSON-first contract for automation.",
   "homepage": "https://github.com/VishalJ99/surface-cli",
   "repository": {
