@@ -32,6 +32,7 @@ import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeThread } from "../../summarizer.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
+import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.js";
 import {
   createGmailDraft,
   downloadGmailAttachmentBytes,
@@ -246,6 +247,7 @@ async function normalizeGmailMessage(
   const unread = (message.labelIds ?? []).includes("UNREAD");
   const body = normalizeGmailBody(message.payload, message.snippet ?? "");
   const attachments = extractAttachmentRecords(message);
+  const bodyText = annotateBodyWithInlineAttachments(body.text, attachments);
 
   let invite: MessageInvite | undefined;
   const calendarText = await extractCalendarText(account, context, message);
@@ -275,12 +277,12 @@ async function normalizeGmailMessage(
       unread,
       ...(subject ? { subject } : {}),
     },
-    snippet: message.snippet ?? body.text.slice(0, 240),
+    snippet: message.snippet ?? bodyText.slice(0, 240),
     body: {
-      text: body.text,
+      text: bodyText,
       truncated: false,
       cached: true,
-      cached_bytes: Buffer.byteLength(body.text, "utf8"),
+      cached_bytes: Buffer.byteLength(bodyText, "utf8"),
     },
     attachments,
     ...(invite ? { invite } : {}),

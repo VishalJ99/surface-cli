@@ -32,6 +32,7 @@ import { assertWriteAllowed, collectWriteRecipients } from "../../lib/write-safe
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeThread } from "../../summarizer.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
+import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.js";
 import { launchOutlookSession, probeOutlookAuth, promptForOutlookLogin } from "./session.js";
 import {
   applySearchQuery,
@@ -175,7 +176,6 @@ function normalizeMessage(
   conversationId: string,
 ): NormalizedMessageRecord {
   const item = entry.item;
-  const body = normalizeOutlookBody(item);
   const invite = buildOutlookInvite(item);
   const from = mailboxFromExchange((item.From as Record<string, unknown> | undefined) ?? null)
     ?? mailboxFromExchange((item.Sender as Record<string, unknown> | undefined) ?? null);
@@ -188,6 +188,8 @@ function normalizeMessage(
   const instanceKey = typeof item.InstanceKey === "string" ? item.InstanceKey : undefined;
   const key = messageProviderKey(entry, conversationId);
   const attachments = buildAttachments(entry, key);
+  const body = normalizeOutlookBody(item);
+  const bodyText = annotateBodyWithInlineAttachments(body.text, attachments);
   const envelope: MessageEnvelope = {
     from,
     to,
@@ -211,12 +213,12 @@ function normalizeMessage(
   return {
     message_ref: "",
     envelope,
-    snippet: typeof item.Preview === "string" ? item.Preview : body.text.slice(0, 240),
+    snippet: typeof item.Preview === "string" ? item.Preview : bodyText.slice(0, 240),
     body: {
-      text: body.text,
+      text: bodyText,
       truncated: false,
       cached: true,
-      cached_bytes: Buffer.byteLength(body.text, "utf8"),
+      cached_bytes: Buffer.byteLength(bodyText, "utf8"),
     },
     attachments,
     ...(invite.is_invite

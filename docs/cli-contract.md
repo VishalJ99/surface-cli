@@ -157,6 +157,10 @@ Each message should contain:
 - `body`
 - `attachments`
 
+`body.text` may include explicit inline-content markers such as `[inline image: image001.png]`
+when the original message contains embedded inline attachments that would otherwise be invisible in
+plain-text output.
+
 ## Recommended Concrete V1 Shapes
 
 The simplest stable contract is:
