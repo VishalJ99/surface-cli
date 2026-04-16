@@ -44,6 +44,21 @@ export interface GmailMessagePayload {
   payload?: GmailPart;
 }
 
+export interface ParsedCalendarMeeting {
+  request_type: string | null;
+  response_type: string | null;
+  organizer: MessageParticipant | null;
+  location: string | null;
+  start: string | null;
+  end: string | null;
+  uid: string | null;
+  status: string | null;
+  timezone: string | null;
+  available_rsvp_actions: string[];
+  attendee?: MessageParticipant;
+  attendee_role?: string;
+}
+
 const CALENDAR_PART_MIME_TYPES = new Set(["text/calendar", "application/ics"]);
 
 function decodeEncodedWords(value: string): string {
@@ -304,7 +319,7 @@ export function parseCalendarInvite(
   icsText: string,
   options: { mailboxEmail?: string | null; recipientEmails: string[] },
 ): {
-  meeting: Record<string, unknown> | null;
+  meeting: ParsedCalendarMeeting | null;
   availableRsvpActions: string[];
 } {
   let method: string | null = null;
@@ -391,7 +406,7 @@ export function parseCalendarInvite(
     ? icsMailbox(eventProperties.get("ORGANIZER")?.value, eventProperties.get("ORGANIZER")?.params ?? {})
     : null;
 
-  const meeting: Record<string, unknown> = {
+  const meeting: ParsedCalendarMeeting = {
     request_type: requestType,
     response_type: selectedAttendee?.partstat ?? null,
     organizer,

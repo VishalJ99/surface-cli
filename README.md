@@ -72,7 +72,7 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - adapter registry for `gmail-api` and `outlook-web-playwright`
 - donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
 - Gmail OAuth login wired to Google desktop-app OAuth with stored refresh tokens under `~/.surface-cli/auth/<account_id>/gmail-token.json`
-- live Gmail `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, and `--draft` on send-like actions
+- live Gmail `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
 - live Outlook `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - summary backends for `openrouter` and `openclaw`
@@ -80,7 +80,6 @@ The repo now contains a working TypeScript scaffold under `src/`:
 
 What is still intentionally incomplete:
 
-- Gmail RSVP
 - draft lifecycle commands
 - move / delete
 - broader automated coverage beyond the opt-in provider v1 e2e scripts and cache-prune policy

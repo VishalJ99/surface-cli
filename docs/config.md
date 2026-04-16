@@ -106,6 +106,10 @@ Summarizer backend runtime requirements:
 
 Gmail auth runtime requirements:
 
+- Gmail RSVP also requires Google Calendar API to be enabled for the same Google Cloud project as
+  the desktop OAuth client, plus one re-run of `surface auth login <account>` after the Calendar
+  scope change lands.
+
 - `SURFACE_GMAIL_CLIENT_SECRET_FILE`
   Optional path to a Google desktop OAuth client secret JSON file.
   If unset, Surface also checks:

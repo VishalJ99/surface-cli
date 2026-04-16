@@ -156,10 +156,9 @@ surface mail rsvp msg_01... --response accept
 ## Provider Notes
 
 - Gmail and Outlook both support read, search, unread fetch, attachments, send/reply/forward,
-  archive, mark-read, mark-unread, and `--draft`.
-- Outlook supports RSVP now.
-- Gmail invite detection exists, but Gmail RSVP is deferred until explicit Google Calendar
-  integration. Do not assume `surface mail rsvp` works on Gmail.
+  archive, mark-read, mark-unread, RSVP, and `--draft`.
+- Gmail RSVP requires Google Calendar API access on the authenticated account. If RSVP returns a
+  reauth error, re-run `surface auth login <account>`.
 
 ## Safety
 
@@ -167,7 +166,6 @@ surface mail rsvp msg_01... --response accept
 - Do not send mail unless write safety is enabled locally.
 - Prefer the configured sink recipients from local config; do not invent recipients.
 - For send-like tests, use `--draft` unless the task explicitly requires a live send.
-- Do not assume Gmail RSVP works; it is intentionally deferred until Calendar integration exists.
 - When testing live sends, only send to recipients already configured locally for safe testing.
 
 ## Examples

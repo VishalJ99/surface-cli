@@ -26,7 +26,7 @@ import type {
   SendResultEnvelope,
   ThreadParticipant,
 } from "../../contracts/mail.js";
-import { SurfaceError, notImplemented } from "../../lib/errors.js";
+import { SurfaceError } from "../../lib/errors.js";
 import { assertWriteAllowed } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeThread } from "../../summarizer.js";
@@ -36,11 +36,15 @@ import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.
 import {
   createGmailDraft,
   downloadGmailAttachmentBytes,
+  getGoogleCalendarEvent,
   getGmailThread,
   listGmailThreads,
+  listGoogleCalendarEventsByIcalUid,
   modifyGmailMessage,
   modifyGmailThread,
+  patchGoogleCalendarEvent,
   sendGmailRawMessage,
+  type GoogleCalendarEventRecord,
   type GmailMessageReference,
   type GmailThreadRecord,
 } from "./api.js";
@@ -232,6 +236,174 @@ function mapCalendarPartstat(value: unknown): string | null {
   }
 }
 
+function mapGoogleCalendarResponseStatus(value: string | undefined | null): string | null {
+  const normalized = (value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "accepted":
+      return "accept";
+    case "declined":
+      return "decline";
+    case "tentative":
+      return "tentative";
+    case "needsaction":
+      return "needs_response";
+    default:
+      return null;
+  }
+}
+
+function googleCalendarResponseStatusForRsvp(response: RsvpResponse): "accepted" | "declined" | "tentative" {
+  switch (response) {
+    case "accept":
+      return "accepted";
+    case "decline":
+      return "declined";
+    case "tentative":
+      return "tentative";
+  }
+}
+
+function googleCalendarEventStart(event: GoogleCalendarEventRecord): string | null {
+  return event.start?.dateTime ?? event.start?.date ?? null;
+}
+
+function normalizeComparableDatePrefix(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? null;
+}
+
+function chooseGoogleCalendarEvent(
+  events: GoogleCalendarEventRecord[],
+  meetingStart: string | null,
+): GoogleCalendarEventRecord | null {
+  if (events.length === 0) {
+    return null;
+  }
+
+  const targetDate = normalizeComparableDatePrefix(meetingStart);
+  if (targetDate) {
+    const match = events.find((event) => normalizeComparableDatePrefix(googleCalendarEventStart(event)) === targetDate);
+    if (match) {
+      return match;
+    }
+  }
+
+  return events[0] ?? null;
+}
+
+function pickCalendarAttendee(
+  event: GoogleCalendarEventRecord,
+  attendeeEmail: string | null,
+  fallbackEmail: string,
+): { email: string; response_status: string | null } | null {
+  const normalizedTarget = (attendeeEmail ?? fallbackEmail).trim().toLowerCase();
+  const normalizedFallback = fallbackEmail.trim().toLowerCase();
+  const attendees = event.attendees ?? [];
+
+  const chosen =
+    attendees.find((attendee) => attendee.self === true)
+    ?? attendees.find((attendee) => (attendee.email ?? "").trim().toLowerCase() === normalizedTarget)
+    ?? attendees.find((attendee) => (attendee.email ?? "").trim().toLowerCase() === normalizedFallback);
+
+  if (!chosen?.email) {
+    return normalizedTarget
+      ? { email: normalizedTarget, response_status: null }
+      : null;
+  }
+
+  return {
+    email: chosen.email,
+    response_status: mapGoogleCalendarResponseStatus(chosen.responseStatus),
+  };
+}
+
+async function hydrateGmailInviteMetadataFromCalendar(
+  account: MailAccount,
+  context: ProviderContext,
+  metadata: {
+    invite: MessageInvite;
+    calendar_uid: string | null;
+    attendee_email: string | null;
+    meeting_start: string | null;
+  },
+): Promise<{
+  invite: MessageInvite;
+  calendar_uid: string | null;
+  attendee_email: string | null;
+  meeting_start: string | null;
+}> {
+  if (!metadata.calendar_uid) {
+    return metadata;
+  }
+
+  try {
+    const events = await listGoogleCalendarEventsByIcalUid(account, context, "primary", metadata.calendar_uid);
+    const event = chooseGoogleCalendarEvent(events, metadata.meeting_start);
+    if (!event) {
+      return metadata;
+    }
+
+    const attendee = pickCalendarAttendee(event, metadata.attendee_email, account.email);
+    return {
+      ...metadata,
+      attendee_email: attendee?.email ?? metadata.attendee_email,
+      invite: {
+        ...metadata.invite,
+        rsvp_supported: true,
+        response_status: attendee?.response_status ?? metadata.invite.response_status,
+        available_rsvp_responses: ["accept", "decline", "tentative"],
+      },
+    };
+  } catch (error) {
+    if (error instanceof SurfaceError && (error.code === "reauth_required" || error.code === "transport_error")) {
+      return metadata;
+    }
+    throw error;
+  }
+}
+
+async function extractGmailInviteMetadata(
+  account: MailAccount,
+  context: ProviderContext,
+  message: GmailMessagePayload,
+  participants: { to: MessageParticipant[]; cc: MessageParticipant[] },
+): Promise<{
+  invite: MessageInvite;
+  calendar_uid: string | null;
+  attendee_email: string | null;
+  meeting_start: string | null;
+} | null> {
+  const calendarText = await extractCalendarText(account, context, message);
+  if (!calendarText) {
+    return null;
+  }
+
+  const parsedInvite = parseCalendarInvite(calendarText, {
+    mailboxEmail: account.email,
+    recipientEmails: [...participants.to, ...participants.cc].map((mailbox) => mailbox.email),
+  });
+  const meeting = parsedInvite.meeting;
+  if (!meeting) {
+    return null;
+  }
+
+  const metadata = {
+    invite: {
+      is_invite: true,
+      rsvp_supported: Boolean(meeting.uid),
+      response_status: mapCalendarPartstat(meeting.response_type),
+      available_rsvp_responses: meeting.uid ? (["accept", "decline", "tentative"] satisfies RsvpResponse[]) : [],
+    },
+    calendar_uid: meeting.uid ?? null,
+    attendee_email: meeting.attendee?.email ?? null,
+    meeting_start: meeting.start ?? null,
+  };
+  return hydrateGmailInviteMetadataFromCalendar(account, context, metadata);
+}
+
 async function normalizeGmailMessage(
   account: MailAccount,
   context: ProviderContext,
@@ -249,22 +421,8 @@ async function normalizeGmailMessage(
   const attachments = extractAttachmentRecords(message);
   const bodyText = annotateBodyWithInlineAttachments(body.text, attachments);
 
-  let invite: MessageInvite | undefined;
-  const calendarText = await extractCalendarText(account, context, message);
-  if (calendarText) {
-    const parsedInvite = parseCalendarInvite(calendarText, {
-      mailboxEmail: account.email,
-      recipientEmails: [...to, ...cc].map((mailbox) => mailbox.email),
-    });
-    if (parsedInvite.meeting) {
-      invite = {
-        is_invite: true,
-        rsvp_supported: false,
-        response_status: mapCalendarPartstat(parsedInvite.meeting.response_type),
-        available_rsvp_responses: [],
-      };
-    }
-  }
+  const inviteMetadata = await extractGmailInviteMetadata(account, context, message, { to, cc });
+  const invite = inviteMetadata?.invite;
 
   return {
     message_ref: "",
@@ -295,6 +453,9 @@ async function normalizeGmailMessage(
       locator: {
         thread_id: message.threadId ?? null,
         message_id: message.id ?? null,
+        calendar_uid: inviteMetadata?.calendar_uid ?? null,
+        attendee_email: inviteMetadata?.attendee_email ?? null,
+        meeting_start: inviteMetadata?.meeting_start ?? null,
       },
     },
   };
@@ -480,11 +641,20 @@ function buildRawMimeMessage(input: {
   return lines.join("\r\n");
 }
 
-function parseMessageLocator(locatorJson: string): { thread_id: string | null; message_id: string | null } {
+function parseMessageLocator(locatorJson: string): {
+  thread_id: string | null;
+  message_id: string | null;
+  calendar_uid: string | null;
+  attendee_email: string | null;
+  meeting_start: string | null;
+} {
   const parsed = JSON.parse(locatorJson) as Record<string, unknown>;
   return {
     thread_id: typeof parsed.thread_id === "string" && parsed.thread_id ? parsed.thread_id : null,
     message_id: typeof parsed.message_id === "string" && parsed.message_id ? parsed.message_id : null,
+    calendar_uid: typeof parsed.calendar_uid === "string" && parsed.calendar_uid ? parsed.calendar_uid : null,
+    attendee_email: typeof parsed.attendee_email === "string" && parsed.attendee_email ? parsed.attendee_email : null,
+    meeting_start: typeof parsed.meeting_start === "string" && parsed.meeting_start ? parsed.meeting_start : null,
   };
 }
 
@@ -545,6 +715,25 @@ function buildMarkMessagesEnvelope(
     account: account.name,
     source: sourceInfo(account),
     updated,
+  };
+}
+
+function buildRsvpEnvelope(
+  account: MailAccount,
+  messageRef: string,
+  threadRef: string,
+  response: RsvpResponse,
+  invite: MessageInvite | undefined,
+): RsvpResultEnvelope {
+  return {
+    schema_version: "1",
+    command: "rsvp",
+    account: account.name,
+    message_ref: messageRef,
+    thread_ref: threadRef,
+    source: sourceInfo(account),
+    response,
+    invite: invite ?? null,
   };
 }
 
@@ -859,6 +1048,112 @@ async function resolveGmailMessageContext(
   };
 }
 
+async function resolveGmailRsvpTarget(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<{
+  stored: StoredMessageRecord;
+  message: GmailMessagePayload;
+  threadRef: string;
+  calendarUid: string;
+  attendeeEmail: string;
+  meetingStart: string | null;
+  invite: MessageInvite;
+}> {
+  const target = await resolveGmailMessageContext(account, messageRef, context);
+  const inviteMetadata = await extractGmailInviteMetadata(account, context, target.message, {
+    to: parseMailboxes(target.headers.to),
+    cc: parseMailboxes(target.headers.cc),
+  });
+
+  if (!inviteMetadata?.calendar_uid) {
+    throw new SurfaceError("unsupported", `Message '${messageRef}' is not a Gmail calendar invite with a resolvable UID.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  if (!inviteMetadata.invite.rsvp_supported) {
+    throw new SurfaceError("unsupported", `Message '${messageRef}' is not a Gmail invite Surface can RSVP to.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  const attendeeEmail =
+    inviteMetadata.attendee_email?.trim().toLowerCase()
+    || account.email.trim().toLowerCase();
+  if (!attendeeEmail) {
+    throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose an attendee email for RSVP.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  return {
+    stored: target.stored,
+    message: target.message,
+    threadRef: target.stored.thread_ref,
+    calendarUid: inviteMetadata.calendar_uid,
+    attendeeEmail,
+    meetingStart: inviteMetadata.meeting_start,
+    invite: inviteMetadata.invite,
+  };
+}
+
+async function performGmailRsvp(
+  account: MailAccount,
+  context: ProviderContext,
+  target: {
+    calendarUid: string;
+    attendeeEmail: string;
+    meetingStart: string | null;
+  },
+  response: RsvpResponse,
+): Promise<MessageInvite> {
+  const events = await listGoogleCalendarEventsByIcalUid(account, context, "primary", target.calendarUid);
+  const event = chooseGoogleCalendarEvent(events, target.meetingStart);
+  if (!event?.id) {
+    throw new SurfaceError(
+      "not_found",
+      `Google Calendar could not find an event matching invite UID '${target.calendarUid}'.`,
+      { account: account.name },
+    );
+  }
+
+  const attendee = pickCalendarAttendee(event, target.attendeeEmail, account.email);
+  if (!attendee?.email) {
+    throw new SurfaceError(
+      "unsupported",
+      `Google Calendar event '${event.id}' does not expose an attendee that Surface can RSVP as.`,
+      { account: account.name },
+    );
+  }
+
+  const patched = await patchGoogleCalendarEvent(account, context, "primary", event.id, {
+    attendeesOmitted: true,
+    attendees: [
+      {
+        email: attendee.email,
+        responseStatus: googleCalendarResponseStatusForRsvp(response),
+      },
+    ],
+  });
+
+  const refreshed = patched.id
+    ? await getGoogleCalendarEvent(account, context, "primary", patched.id)
+    : patched;
+  const refreshedAttendee = pickCalendarAttendee(refreshed, attendee.email, account.email);
+
+  return {
+    is_invite: true,
+    rsvp_supported: true,
+    response_status: refreshedAttendee?.response_status ?? mapGoogleCalendarResponseStatus(googleCalendarResponseStatusForRsvp(response)),
+    available_rsvp_responses: ["accept", "decline", "tentative"],
+  };
+}
+
 async function refreshRefsFromGmailResponse(
   account: MailAccount,
   context: ProviderContext,
@@ -1169,8 +1464,16 @@ export class GmailApiAdapter implements MailProviderAdapter {
     };
   }
 
-  async rsvp(account: MailAccount, _messageRef: string, _response: RsvpResponse): Promise<RsvpResultEnvelope> {
-    notImplemented("Gmail RSVP is deferred pending explicit Google Calendar integration.", account.name);
+  async rsvp(account: MailAccount, messageRef: string, response: RsvpResponse, context: ProviderContext): Promise<RsvpResultEnvelope> {
+    const target = await resolveGmailRsvpTarget(account, messageRef, context);
+    const invite = await performGmailRsvp(account, context, target, response);
+    context.db.updateInviteForThread(target.threadRef, {
+      is_invite: true,
+      rsvp_supported: invite.rsvp_supported,
+      response_status: invite.response_status,
+      available_rsvp_responses: invite.available_rsvp_responses,
+    });
+    return buildRsvpEnvelope(account, messageRef, target.threadRef, response, invite);
   }
 
   async sendMessage(

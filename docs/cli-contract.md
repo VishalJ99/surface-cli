@@ -27,6 +27,9 @@ Gmail auth notes:
 
 - `surface auth login <account>` for `gmail-api` uses a loopback OAuth flow and prints the Google
   authorization URL to `stderr`
+- Gmail RSVP also depends on Google Calendar scope. After enabling Calendar API for the same Google
+  Cloud project, existing Gmail accounts must re-run `surface auth login <account>` once so
+  Surface can store a token with Calendar access.
 - `surface auth login <account> --remote-host <host>` keeps the same public command but changes the
   transport details:
   - Gmail starts an SSH port-forward to the remote host first, then runs the remote loopback OAuth

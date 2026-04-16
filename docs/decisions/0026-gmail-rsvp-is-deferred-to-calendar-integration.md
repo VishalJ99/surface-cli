@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by `0029-gmail-rsvp-uses-google-calendar-api.md`
 
 ## Context
 

@@ -10,6 +10,7 @@ import type { ProviderContext } from "../types.js";
 const GMAIL_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/calendar.events",
 ] as const;
 
 const DEFAULT_CALLBACK_PORT = 8765;

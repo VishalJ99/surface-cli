@@ -8,6 +8,7 @@ import type {
   AttachmentDownloadEnvelope,
   AttachmentListEnvelope,
   ReadResultEnvelope,
+  RsvpResultEnvelope,
   SearchResultEnvelope,
   SendResultEnvelope,
   ThreadResult,
@@ -173,6 +174,29 @@ async function findInboxMessage(env: NodeJS.ProcessEnv, account: string): Promis
   }
 
   fail("Could not find a Gmail inbox message for archive/read-state verification.");
+}
+
+async function findInviteMessage(env: NodeJS.ProcessEnv, account: string): Promise<{
+  thread_ref: string;
+  message_ref: string;
+}> {
+  const search = await runSurfaceJson<SearchResultEnvelope>(
+    ["mail", "search", "--account", account, "--text", "filename:ics newer_than:3650d", "--limit", "10"],
+    env,
+  );
+
+  for (const thread of search.threads) {
+    for (const message of thread.messages) {
+      if (message.invite?.is_invite && message.invite.rsvp_supported) {
+        return {
+          thread_ref: thread.thread_ref,
+          message_ref: message.message_ref,
+        };
+      }
+    }
+  }
+
+  fail("Could not find a Gmail invite message with RSVP support for live verification.");
 }
 
 async function main(): Promise<void> {
@@ -367,6 +391,19 @@ async function main(): Promise<void> {
   );
   assert(readMarked.message.envelope.unread === false, "read --mark-read did not return unread=false");
   console.log("mark-read/mark-unread/read --mark-read: verified read-state mutation");
+
+  const inviteTarget = await findInviteMessage(childEnv, account);
+  const rsvpResult = await runSurfaceJson<RsvpResultEnvelope>(
+    ["mail", "rsvp", inviteTarget.message_ref, "--response", "tentative"],
+    childEnv,
+  );
+  assert(rsvpResult.invite?.response_status === "tentative", "gmail rsvp did not return response_status=tentative");
+  const inviteRead = await runSurfaceJson<ReadResultEnvelope>(
+    ["mail", "read", inviteTarget.message_ref, "--refresh"],
+    childEnv,
+  );
+  assert(inviteRead.message.invite?.response_status === "tentative", "gmail rsvp was not reflected by refreshed read");
+  console.log("rsvp: verified tentative response against a live Gmail invite");
 
   const archiveResult = await runSurfaceJson<{ status: string; thread_ref: string }>(
     ["mail", "archive", inboxTarget.message_ref],

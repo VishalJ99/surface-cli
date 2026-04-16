@@ -801,6 +801,10 @@ export class SurfaceDatabase {
   }
 
   updateInviteStatusForThread(threadRef: string, responseStatus: string | null): void {
+    this.updateInviteForThread(threadRef, { response_status: responseStatus });
+  }
+
+  updateInviteForThread(threadRef: string, patch: Partial<MessageInvite>): void {
     const rows = this.connection
       .prepare(
         `
@@ -830,10 +834,7 @@ export class SurfaceDatabase {
       const invite = JSON.parse(row.invite_json) as MessageInvite;
       update.run({
         message_ref: row.message_ref,
-        invite_json: JSON.stringify({
-          ...invite,
-          response_status: responseStatus,
-        }),
+        invite_json: JSON.stringify({ ...invite, ...patch }),
         last_synced_at: lastSyncedAt,
       });
     }
