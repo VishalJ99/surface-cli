@@ -122,6 +122,9 @@ surface auth login <gmail-account> --remote-host <host>
 ```
 
 Surface starts the SSH port-forward for you before the OAuth approval URL is printed.
+If the remote account already has `~/.surface-cli/auth/<account_id>/client_secret.json`, Surface
+reuses it. A local `client_secret.json` or `SURFACE_GMAIL_CLIENT_SECRET_FILE` is only required
+when the remote host does not already have Gmail OAuth client credentials stored for that account.
 
 For Outlook headless remote setup, use the same public command:
 

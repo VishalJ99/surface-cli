@@ -184,7 +184,10 @@ surface auth login <gmail-account> --remote-host <ssh-host>
 What happens:
 
 - Surface starts SSH port forwarding first
+- Surface reuses the remote account's stored `client_secret.json` when present
 - Surface runs the Gmail OAuth listener on the remote host
+- if the remote host does not already have Gmail OAuth client credentials stored for that account,
+  Surface falls back to a local `client_secret.json` or `SURFACE_GMAIL_CLIENT_SECRET_FILE`
 - you open the Google auth URL locally
 - the OAuth callback is forwarded back to the remote host
 - the refresh token is stored on the remote host under `~/.surface-cli/auth/<account_id>/`

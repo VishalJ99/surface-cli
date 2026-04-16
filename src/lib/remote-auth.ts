@@ -294,6 +294,18 @@ function resolveLocalGmailClientSecretSource(context: RuntimeContext, accountNam
   );
 }
 
+async function remoteFileExists(remoteHost: string, filePath: string): Promise<boolean> {
+  try {
+    await runRemoteShell(remoteHost, `test -f ${shellPath(filePath)}`);
+    return true;
+  } catch (error) {
+    if (error instanceof SurfaceError && error.code === "remote_command_failed") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function resolveRemoteSurfaceRoot(remoteHost: string): Promise<string> {
   const defaultRoot = "~/.surface-cli";
   const command = "if [ -f ~/.surface-cli/config.toml ]; then cat ~/.surface-cli/config.toml; fi";
@@ -480,10 +492,14 @@ async function runRemoteGmailLogin(
   const callbackPort = gmailCallbackPort();
   const surfaceRoot = await resolveRemoteSurfaceRoot(remoteHost);
   const remoteAuthDir = `${surfaceRoot}/auth/${account.account_id}`;
-  const localClientSecret = resolveLocalGmailClientSecretSource(context, account.name);
+  const remoteClientSecret = `${remoteAuthDir}/client_secret.json`;
 
   await ensureRemoteDirectory(remoteHost, remoteAuthDir);
-  await syncPathToRemote(localClientSecret, remoteHost, `${remoteAuthDir}/client_secret.json`);
+  const remoteHasClientSecret = await remoteFileExists(remoteHost, remoteClientSecret);
+  if (!remoteHasClientSecret) {
+    const localClientSecret = resolveLocalGmailClientSecretSource(context, account.name);
+    await syncPathToRemote(localClientSecret, remoteHost, remoteClientSecret);
+  }
 
   const tunnel = spawn("ssh", ["-N", "-L", `${callbackPort}:127.0.0.1:${callbackPort}`, remoteHost], {
     stdio: ["inherit", "ignore", "pipe"],

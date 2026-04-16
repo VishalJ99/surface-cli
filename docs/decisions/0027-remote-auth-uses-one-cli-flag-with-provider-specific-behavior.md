@@ -24,7 +24,8 @@ Provider-specific behavior sits behind that shared flag:
 
 - Gmail:
   - start the SSH loopback tunnel first
-  - copy the chosen `client_secret.json` to the remote account auth directory if needed
+  - reuse the remote account's stored `client_secret.json` when present
+  - otherwise copy a chosen local `client_secret.json` to the remote account auth directory
   - run the remote Gmail OAuth flow so the callback lands on the remote Surface process
 - Outlook:
   - launch local Chrome in a dedicated Surface profile

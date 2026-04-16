@@ -31,6 +31,8 @@ Gmail auth notes:
   transport details:
   - Gmail starts an SSH port-forward to the remote host first, then runs the remote loopback OAuth
     flow so the callback lands on the remote Surface process
+  - Gmail reuses the remote account's stored `client_secret.json` when present and only falls back
+    to a local client secret file/env override when the remote host does not already have one
   - Outlook performs local browser login in a dedicated Surface Chrome profile, then syncs that
     profile to the remote account auth path and validates it remotely
 - Remote auth login assumes the named account already exists on the remote host
