@@ -1,6 +1,8 @@
 # Decision: Support a broad `--session` flag with explicit daemon-backed semantics
 Ticket: PER-166
 Timestamp: 2026-04-20T13:55:00Z
+Archived: 2026-04-20
+Superseded by: docs/decisions/0032-explicit-session-ids-for-warm-outlook-read-paths.md
 
 ## What I decided
 Surface should expose an explicit `--session <session_id>` option broadly on mail and attachment commands, while keeping the default CLI stateless. When a command needs provider I/O and the transport supports warm sessions, Surface should route through the daemon; when the command is satisfied locally, the flag is accepted but unused; when the transport cannot honor it, Surface should fail with a clear session-specific error.

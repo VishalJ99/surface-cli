@@ -1,6 +1,8 @@
 # Decision: Reuse unchanged summaries and batch whole threads for OpenClaw
 Ticket: PER-167
 Timestamp: 2026-04-20T13:55:00Z
+Archived: 2026-04-20
+Superseded by: docs/decisions/0031-reuse-thread-summaries-and-batch-openclaw-by-thread.md
 
 ## What I decided
 Surface should cache summaries by a fingerprint of the canonical summary input and only re-summarize threads whose fingerprint changed. For new or changed threads on the OpenClaw backend, Surface should summarize whole threads in bounded batches with fallback splitting instead of issuing one OpenClaw call per thread.
