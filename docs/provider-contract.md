@@ -88,6 +88,9 @@ Provider-specific payloads must be mapped into:
 - attachment metadata
 - provider locator data stored internally for later thread reads, message reads, and actions
 
+Providers should persist normalized thread/message state before summary generation so summary
+reuse can be keyed from the stored canonical thread content rather than provider-native payloads.
+
 Public JSON must not leak transport-specific field names unless explicitly documented.
 
 ## Capability Model
@@ -139,6 +142,8 @@ Each provider should pass the same contract tests for:
 - read behavior on cache hit and cache miss
 - attachment metadata shape
 - machine-readable error codes
+- summary reuse must not change the public result shape; unchanged threads may reuse stored
+  summaries when the canonical content is unchanged
 
 ## Provider Locator Requirements
 

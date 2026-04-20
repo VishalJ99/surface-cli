@@ -29,7 +29,7 @@ import type {
 import { SurfaceError } from "../../lib/errors.js";
 import { assertWriteAllowed } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
-import { summarizeThread } from "../../summarizer.js";
+import { summarizeAndPersistThreads } from "../../summarizer.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
 import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.js";
@@ -854,24 +854,6 @@ function buildReadEnvelope(
   };
 }
 
-async function maybeSummarizeThreads(
-  threads: NormalizedThreadRecord[],
-  context: ProviderContext,
-): Promise<NormalizedThreadRecord[]> {
-  if (context.config.summarizerBackend === "none") {
-    return threads;
-  }
-
-  const summarized: NormalizedThreadRecord[] = [];
-  for (const thread of threads) {
-    summarized.push({
-      ...thread,
-      summary: await summarizeThread(thread, context.config),
-    });
-  }
-  return summarized;
-}
-
 async function persistThreads(
   account: MailAccount,
   context: ProviderContext,
@@ -1008,9 +990,6 @@ async function persistThreads(
       }
 
       context.db.replaceThreadMessages(resolvedThreadRef, messageRefs);
-      if (thread.summary) {
-        context.db.upsertSummary(resolvedThreadRef, thread.summary);
-      }
 
       persistedThreads.push({
         ...thread,
@@ -1030,8 +1009,8 @@ async function fetchAndPersistGmailThread(
 ): Promise<void> {
   const thread = await getGmailThread(account, context, threadId);
   const normalized = await normalizeGmailThread(account, context, thread);
-  const withSummary = (await maybeSummarizeThreads([normalized], context))[0]!;
-  await persistThreads(account, context, [withSummary]);
+  const persisted = await persistThreads(account, context, [normalized]);
+  await summarizeAndPersistThreads(persisted, context.config, context.db);
 }
 
 async function refreshStoredMessage(
@@ -1306,8 +1285,8 @@ async function fetchGmailThreads(
   );
 
   const normalized = await Promise.all(hydrated.map((thread) => normalizeGmailThread(account, context, thread)));
-  const summarized = await maybeSummarizeThreads(normalized, context);
-  return persistThreads(account, context, summarized);
+  const persisted = await persistThreads(account, context, normalized);
+  return summarizeAndPersistThreads(persisted, context.config, context.db);
 }
 
 async function sendOrDraftGmailMessage(

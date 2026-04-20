@@ -27,12 +27,16 @@ SQLite should store enough information to resolve refs and power later commands:
 - truncation state
 - attachment metadata
 - summary metadata
+- summary fingerprint metadata for reuse
 - timestamps such as `first_seen_at`, `last_synced_at`, `last_read_at`
 
 ## Cache Behavior
 
 - `search` and `fetch-unread` should upsert results into SQLite.
 - In the first implementation slice, they should cache full normalized non-summary body content without truncation.
+- `search`, `fetch-unread`, and `thread get --refresh` should persist normalized thread/message state before summary generation.
+- Summaries should live in SQLite with backend, model, brief, action flags, importance, fingerprint, and generation time.
+- When the canonical summary fingerprint is unchanged for the same backend/model, Surface should reuse the stored summary instead of regenerating it.
 - `read <message_ref>` should check local state first.
 - On cache miss, truncation, or refresh, `read` should fetch live and update local state.
 
@@ -86,8 +90,6 @@ Downloaded attachments should also not be deleted by cache commands unless expli
 
 ## Open Questions
 
-- exact SQLite schema and migration strategy
-- whether summaries belong only in SQLite, only on disk, or both
 - truncation settings and defaults after truncation is introduced
 - attachment retention policy
 - how to represent stale vs fresh mailbox state

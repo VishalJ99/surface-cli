@@ -30,7 +30,7 @@ import type {
 import { SurfaceError } from "../../lib/errors.js";
 import { assertWriteAllowed, collectWriteRecipients } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
-import { summarizeThread } from "../../summarizer.js";
+import { summarizeAndPersistThreads } from "../../summarizer.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
 import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.js";
 import { launchOutlookSession, probeOutlookAuth, promptForOutlookLogin } from "./session.js";
@@ -633,9 +633,6 @@ async function persistThreads(
       if (threadInviteStatus) {
         context.db.updateInviteStatusForThread(resolvedThreadRef, threadInviteStatus);
       }
-      if (thread.summary) {
-        context.db.upsertSummary(resolvedThreadRef, thread.summary);
-      }
 
       persistedThreads.push({
         ...thread,
@@ -646,25 +643,6 @@ async function persistThreads(
 
     return persistedThreads;
   });
-}
-
-async function maybeSummarizeThreads(
-  threads: NormalizedThreadRecord[],
-  context: ProviderContext,
-): Promise<NormalizedThreadRecord[]> {
-  if (context.config.summarizerBackend === "none") {
-    return threads;
-  }
-
-  const summarized: NormalizedThreadRecord[] = [];
-  for (const thread of threads) {
-    const summary = await summarizeThread(thread, context.config);
-    summarized.push({
-      ...thread,
-      summary,
-    });
-  }
-  return summarized;
 }
 
 async function refreshOutlookConversation(
@@ -679,7 +657,8 @@ async function refreshOutlookConversation(
       timeoutMs: context.config.providerTimeoutMs,
     });
     const bundle = await fetchConversationBundle(session.context.request, capturedSession, conversationId);
-    await persistThreads(account, context, [normalizeThread(bundle)]);
+    const persisted = await persistThreads(account, context, [normalizeThread(bundle)]);
+    await summarizeAndPersistThreads(persisted, context.config, context.db);
   } finally {
     await session.context.close();
     session.cleanup?.();
@@ -1453,9 +1432,10 @@ async function fetchOutlookThreads(
     const normalized = bundles.map((bundle) => normalizeThread(bundle));
     const filtered = options.postFilter ? normalized.filter(options.postFilter) : normalized;
     const limited = filtered.slice(0, options.limit);
-    const summarized =
-      options.summarize === false ? limited : await maybeSummarizeThreads(limited, context);
-    return await persistThreads(account, context, summarized);
+    const persisted = await persistThreads(account, context, limited);
+    return options.summarize === false
+      ? persisted
+      : await summarizeAndPersistThreads(persisted, context.config, context.db);
   } finally {
     await session.context.close();
     session.cleanup?.();

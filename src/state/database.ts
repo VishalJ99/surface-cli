@@ -46,6 +46,16 @@ export interface StoredProviderLocator {
   locator_json: string;
 }
 
+export interface StoredSummaryRecord {
+  thread_ref: string;
+  backend: string;
+  model: string;
+  brief: string;
+  needs_action: number;
+  importance: "low" | "medium" | "high";
+  fingerprint: string | null;
+}
+
 export class SurfaceDatabase {
   readonly connection: InstanceType<typeof Database>;
 
@@ -149,6 +159,7 @@ export class SurfaceDatabase {
         brief TEXT NOT NULL,
         needs_action INTEGER NOT NULL DEFAULT 0,
         importance TEXT NOT NULL,
+        fingerprint TEXT,
         generated_at TEXT NOT NULL,
         FOREIGN KEY(thread_ref) REFERENCES threads(thread_ref) ON DELETE CASCADE
       );
@@ -156,6 +167,7 @@ export class SurfaceDatabase {
 
     this.ensureColumn("threads", "participants_json", "TEXT NOT NULL DEFAULT '[]'");
     this.ensureColumn("messages", "invite_json", "TEXT");
+    this.ensureColumn("summaries", "fingerprint", "TEXT");
     this.ensureProviderLocatorSchema();
   }
 
@@ -682,7 +694,7 @@ export class SurfaceDatabase {
       .run(savedTo, attachmentId);
   }
 
-  upsertSummary(threadRef: string, summary: ThreadSummary): void {
+  upsertSummary(threadRef: string, summary: ThreadSummary, fingerprint: string | null): void {
     this.connection
       .prepare(
         `
@@ -693,6 +705,7 @@ export class SurfaceDatabase {
           brief,
           needs_action,
           importance,
+          fingerprint,
           generated_at
         ) VALUES (
           @thread_ref,
@@ -701,6 +714,7 @@ export class SurfaceDatabase {
           @brief,
           @needs_action,
           @importance,
+          @fingerprint,
           @generated_at
         )
         ON CONFLICT(thread_ref) DO UPDATE SET
@@ -709,6 +723,7 @@ export class SurfaceDatabase {
           brief = excluded.brief,
           needs_action = excluded.needs_action,
           importance = excluded.importance,
+          fingerprint = excluded.fingerprint,
           generated_at = excluded.generated_at
         `,
       )
@@ -719,30 +734,43 @@ export class SurfaceDatabase {
         brief: summary.brief,
         needs_action: summary.needs_action ? 1 : 0,
         importance: summary.importance,
+        fingerprint,
         generated_at: nowIsoUtc(),
       });
   }
 
-  findSummary(threadRef: string): ThreadSummary | null {
+  clearSummary(threadRef: string): void {
+    this.connection
+      .prepare(
+        `
+        DELETE FROM summaries
+        WHERE thread_ref = ?
+        `,
+      )
+      .run(threadRef);
+  }
+
+  findStoredSummary(threadRef: string): StoredSummaryRecord | null {
     const row = this.connection
       .prepare(
         `
-        SELECT backend, model, brief, needs_action, importance
+        SELECT thread_ref, backend, model, brief, needs_action, importance, fingerprint
         FROM summaries
         WHERE thread_ref = ?
         LIMIT 1
         `,
       )
-      .get(threadRef) as
-      | {
-          backend: string;
-          model: string;
-          brief: string;
-          needs_action: number;
-          importance: "low" | "medium" | "high";
-        }
-      | undefined;
+      .get(threadRef) as StoredSummaryRecord | undefined;
 
+    if (!row) {
+      return null;
+    }
+
+    return row;
+  }
+
+  findSummary(threadRef: string): ThreadSummary | null {
+    const row = this.findStoredSummary(threadRef);
     if (!row) {
       return null;
     }

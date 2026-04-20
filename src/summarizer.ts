@@ -1,16 +1,56 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 
 import type { ThreadSummary, NormalizedThreadRecord } from "./contracts/mail.js";
 import type { SurfaceConfig } from "./config.js";
+import type { SurfaceDatabase } from "./state/database.js";
 
 const execFileAsync = promisify(execFile);
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OPENCLAW_BATCH_MAX_THREADS = 6;
+const OPENCLAW_BATCH_MAX_INPUT_BYTES = 32 * 1024;
+const OPENCLAW_SUMMARY_THINKING = "low";
 
 interface SummaryShape {
   brief: string;
   needs_action: boolean;
   importance: "low" | "medium" | "high";
+}
+
+interface SummaryThreadPayload {
+  thread_ref: string;
+  source: NormalizedThreadRecord["source"];
+  subject: string;
+  participants: NormalizedThreadRecord["envelope"]["participants"];
+  messages: Array<{
+    from: NormalizedThreadRecord["messages"][number]["envelope"]["from"];
+    to: NormalizedThreadRecord["messages"][number]["envelope"]["to"];
+    cc: NormalizedThreadRecord["messages"][number]["envelope"]["cc"];
+    sent_at: string | null;
+    received_at: string | null;
+    snippet: string;
+    body: string;
+    invite: NormalizedThreadRecord["messages"][number]["invite"] | null;
+    attachments: Array<{
+      filename: string;
+      mime_type: string;
+      size_bytes: number | null;
+      inline: boolean;
+    }>;
+  }>;
+}
+
+interface PreparedSummaryThread {
+  thread: NormalizedThreadRecord;
+  payload: SummaryThreadPayload;
+  fingerprint: string;
+  inputBytes: number;
+}
+
+interface SummaryTarget {
+  backend: "openrouter" | "openclaw";
+  model: string;
 }
 
 function clipUtf8(input: string, maxBytes: number): string {
@@ -25,9 +65,9 @@ function clipUtf8(input: string, maxBytes: number): string {
   return clipped;
 }
 
-function buildThreadPayload(thread: NormalizedThreadRecord, maxBytes: number): Record<string, unknown> {
+function buildThreadPayload(thread: NormalizedThreadRecord, maxBytes: number): SummaryThreadPayload {
   let remainingBytes = maxBytes;
-  const messages: Array<Record<string, unknown>> = [];
+  const messages: SummaryThreadPayload["messages"] = [];
 
   for (const message of thread.messages) {
     if (remainingBytes <= 0) {
@@ -43,7 +83,6 @@ function buildThreadPayload(thread: NormalizedThreadRecord, maxBytes: number): R
       cc: message.envelope.cc,
       sent_at: message.envelope.sent_at,
       received_at: message.envelope.received_at,
-      unread: message.envelope.unread,
       snippet: message.snippet,
       body: bodyText,
       invite: message.invite ?? null,
@@ -59,12 +98,13 @@ function buildThreadPayload(thread: NormalizedThreadRecord, maxBytes: number): R
   return {
     thread_ref: thread.thread_ref,
     source: thread.source,
-    envelope: thread.envelope,
+    subject: thread.envelope.subject,
+    participants: thread.envelope.participants,
     messages,
   };
 }
 
-function buildPrompt(thread: NormalizedThreadRecord, config: SurfaceConfig): string {
+function buildSinglePrompt(payload: SummaryThreadPayload): string {
   return JSON.stringify(
     {
       instructions: [
@@ -72,12 +112,51 @@ function buildPrompt(thread: NormalizedThreadRecord, config: SurfaceConfig): str
         "Return JSON only.",
         "Use exactly this shape: {\"brief\": string, \"needs_action\": boolean, \"importance\": \"low\" | \"medium\" | \"high\"}.",
         "Keep brief to one or two sentences.",
+        "Base the summary on the latest state of the thread, not stale quoted history.",
+        "Do not infer named programs, teams, organizations, or context that are not explicitly present in the thread.",
+        "When details are ambiguous, prefer generic wording over guessed specifics.",
       ],
-      thread: buildThreadPayload(thread, config.summaryInputMaxBytes),
+      thread: payload,
     },
     null,
     2,
   );
+}
+
+function buildBatchPrompt(batch: PreparedSummaryThread[]): string {
+  return JSON.stringify(
+    {
+      instructions: [
+        "Summarize each email thread for an automation agent.",
+        "Return JSON only.",
+        "Use exactly this shape: {\"summaries\": [{\"thread_ref\": string, \"brief\": string, \"needs_action\": boolean, \"importance\": \"low\" | \"medium\" | \"high\"}]}",
+        "Return exactly one summary object per input thread.",
+        "Do not omit threads, add extra threads, or merge two threads into one summary.",
+        "Keep each brief to one or two sentences.",
+        "Base each summary on the latest state of that thread, not stale quoted history.",
+        "Summarize each thread independently. Never carry named programs, teams, organizations, or context from one thread into another.",
+        "Do not infer named programs, teams, organizations, or context that are not explicitly present in that thread.",
+        "When details are ambiguous, prefer generic wording over guessed specifics.",
+      ],
+      threads: batch.map((entry) => entry.payload),
+    },
+    null,
+    2,
+  );
+}
+
+function makeFingerprint(payload: SummaryThreadPayload): string {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function prepareThread(thread: NormalizedThreadRecord, config: SurfaceConfig): PreparedSummaryThread {
+  const payload = buildThreadPayload(thread, config.summaryInputMaxBytes);
+  return {
+    thread,
+    payload,
+    fingerprint: makeFingerprint(payload),
+    inputBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
+  };
 }
 
 function stripMarkdownFences(rawText: string): string {
@@ -109,7 +188,69 @@ function tryParseSummaryObject(rawText: string): SummaryShape {
   };
 }
 
-async function summarizeWithOpenRouter(thread: NormalizedThreadRecord, config: SurfaceConfig): Promise<ThreadSummary> {
+function tryParseBatchSummaryObject(rawText: string, expectedThreadRefs: string[]): Map<string, SummaryShape> {
+  const parsed = JSON.parse(stripMarkdownFences(rawText)) as Record<string, unknown>;
+  const items = Array.isArray(parsed.summaries) ? parsed.summaries : [];
+  const summaries = new Map<string, SummaryShape>();
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+    const threadRef = typeof record.thread_ref === "string" ? record.thread_ref : "";
+    if (!threadRef || summaries.has(threadRef)) {
+      continue;
+    }
+
+    const parsedSummary = tryParseSummaryObject(JSON.stringify(record));
+    summaries.set(threadRef, parsedSummary);
+  }
+
+  if (expectedThreadRefs.some((threadRef) => !summaries.has(threadRef))) {
+    throw new Error("Batch summary response omitted one or more threads.");
+  }
+
+  return summaries;
+}
+
+function extractJsonFromMixedOutput(rawOutput: string): string {
+  const trimmed = rawOutput.trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return trimmed.slice(start, end + 1);
+  }
+  return trimmed;
+}
+
+function extractTextFromOpenClawEnvelope(rawOutput: string): string {
+  const parsed = JSON.parse(extractJsonFromMixedOutput(rawOutput)) as Record<string, unknown>;
+
+  const payloads =
+    Array.isArray(parsed.payloads)
+      ? parsed.payloads
+      : parsed.result && typeof parsed.result === "object" && Array.isArray((parsed.result as Record<string, unknown>).payloads)
+        ? (parsed.result as Record<string, unknown>).payloads as unknown[]
+        : Array.isArray(parsed.outputs)
+          ? parsed.outputs
+          : [];
+
+  for (const payload of payloads) {
+    if (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).text === "string") {
+      return (payload as Record<string, unknown>).text as string;
+    }
+  }
+
+  if (typeof parsed.summary === "string") {
+    return parsed.summary;
+  }
+
+  return rawOutput;
+}
+
+async function summarizeWithOpenRouter(payload: SummaryThreadPayload, config: SurfaceConfig): Promise<SummaryShape> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is required when summarizer_backend = openrouter.");
@@ -133,7 +274,7 @@ async function summarizeWithOpenRouter(thread: NormalizedThreadRecord, config: S
         },
         {
           role: "user",
-          content: buildPrompt(thread, config),
+          content: buildSinglePrompt(payload),
         },
       ],
     }),
@@ -144,10 +285,10 @@ async function summarizeWithOpenRouter(thread: NormalizedThreadRecord, config: S
     throw new Error(`OpenRouter request failed with HTTP ${response.status}: ${await response.text()}`);
   }
 
-  const payload = await response.json() as {
+  const responsePayload = await response.json() as {
     choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
   };
-  const content = payload.choices?.[0]?.message?.content;
+  const content = responsePayload.choices?.[0]?.message?.content;
   const rawText = typeof content === "string"
     ? content
     : Array.isArray(content)
@@ -156,66 +297,10 @@ async function summarizeWithOpenRouter(thread: NormalizedThreadRecord, config: S
         .map((item) => item.text)
         .join("")
       : "";
-  const parsed = tryParseSummaryObject(rawText);
-
-  return {
-    backend: "openrouter",
-    model: config.summarizerModel,
-    brief: parsed.brief,
-    needs_action: parsed.needs_action,
-    importance: parsed.importance,
-  };
+  return tryParseSummaryObject(rawText);
 }
 
-function extractJsonFromMixedOutput(rawOutput: string): string {
-  const trimmed = rawOutput.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return trimmed.slice(start, end + 1);
-  }
-  return trimmed;
-}
-
-function extractTextFromOpenClawEnvelope(rawOutput: string): string {
-  const parsed = JSON.parse(extractJsonFromMixedOutput(rawOutput)) as Record<string, unknown>;
-
-  const payloads =
-    Array.isArray(parsed.payloads)
-      ? parsed.payloads
-      : parsed.result && typeof parsed.result === "object" && Array.isArray((parsed.result as Record<string, unknown>).payloads)
-        ? (parsed.result as Record<string, unknown>).payloads as unknown[]
-        : [];
-
-  for (const payload of payloads) {
-    if (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).text === "string") {
-      return (payload as Record<string, unknown>).text as string;
-    }
-  }
-
-  if (typeof parsed.summary === "string") {
-    return parsed.summary;
-  }
-
-  return rawOutput;
-}
-
-async function resolveOpenClawModel(agentId: string): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("openclaw", ["agents", "list", "--json"], {
-      timeout: 10_000,
-      maxBuffer: 1024 * 1024,
-    });
-    const payload = JSON.parse(stdout) as Array<{ id?: string; model?: string; isDefault?: boolean }>;
-    const matched = payload.find((agent) => agent.id === agentId)
-      ?? payload.find((agent) => agent.isDefault);
-    return matched?.model ?? "openclaw/local-agent";
-  } catch {
-    return "openclaw/local-agent";
-  }
-}
-
-async function summarizeWithOpenClaw(thread: NormalizedThreadRecord, config: SurfaceConfig): Promise<ThreadSummary> {
+async function runOpenClawPrompt(prompt: string, config: SurfaceConfig): Promise<string> {
   const agentId = process.env.SURFACE_OPENCLAW_AGENT ?? "main";
   const { stdout } = await execFileAsync(
     "openclaw",
@@ -228,42 +313,194 @@ async function summarizeWithOpenClaw(thread: NormalizedThreadRecord, config: Sur
       agentId,
       "--json",
       "--thinking",
-      "medium",
+      OPENCLAW_SUMMARY_THINKING,
       "--timeout",
       String(Math.max(10, Math.ceil(config.summarizerTimeoutMs / 1000))),
       "--message",
-      buildPrompt(thread, config),
+      prompt,
     ],
     {
       timeout: config.summarizerTimeoutMs,
-      maxBuffer: 1024 * 1024,
+      maxBuffer: 2 * 1024 * 1024,
     },
   );
 
-  const parsed = tryParseSummaryObject(extractTextFromOpenClawEnvelope(stdout));
-  return {
-    backend: "openclaw",
-    model: await resolveOpenClawModel(agentId),
-    brief: parsed.brief,
-    needs_action: parsed.needs_action,
-    importance: parsed.importance,
-  };
+  return extractTextFromOpenClawEnvelope(stdout);
 }
 
-export async function summarizeThread(
-  thread: NormalizedThreadRecord,
+async function summarizeOpenClawSingle(thread: PreparedSummaryThread, config: SurfaceConfig): Promise<SummaryShape> {
+  return tryParseSummaryObject(await runOpenClawPrompt(buildSinglePrompt(thread.payload), config));
+}
+
+function buildOpenClawBatches(threads: PreparedSummaryThread[]): PreparedSummaryThread[][] {
+  const batches: PreparedSummaryThread[][] = [];
+  let currentBatch: PreparedSummaryThread[] = [];
+  let currentBytes = 0;
+
+  for (const thread of threads) {
+    const nextBytes = currentBytes + thread.inputBytes;
+    if (
+      currentBatch.length > 0
+      && (currentBatch.length >= OPENCLAW_BATCH_MAX_THREADS || nextBytes > OPENCLAW_BATCH_MAX_INPUT_BYTES)
+    ) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBytes = 0;
+    }
+
+    currentBatch.push(thread);
+    currentBytes += thread.inputBytes;
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+}
+
+async function summarizeOpenClawBatch(
+  batch: PreparedSummaryThread[],
   config: SurfaceConfig,
-): Promise<ThreadSummary | null> {
-  if (config.summarizerBackend === "none") {
-    return null;
+): Promise<Map<string, SummaryShape>> {
+  if (batch.length === 1) {
+    return new Map([[batch[0]!.thread.thread_ref, await summarizeOpenClawSingle(batch[0]!, config)]]);
   }
 
   try {
-    if (config.summarizerBackend === "openrouter") {
-      return await summarizeWithOpenRouter(thread, config);
+    const parsed = tryParseBatchSummaryObject(
+      await runOpenClawPrompt(buildBatchPrompt(batch), config),
+      batch.map((thread) => thread.thread.thread_ref),
+    );
+    return parsed;
+  } catch (error) {
+    if (batch.length === 1) {
+      throw error;
     }
-    return await summarizeWithOpenClaw(thread, config);
-  } catch {
-    return null;
+
+    const midpoint = Math.ceil(batch.length / 2);
+    const left = await summarizeOpenClawBatch(batch.slice(0, midpoint), config);
+    const right = await summarizeOpenClawBatch(batch.slice(midpoint), config);
+    return new Map([...left, ...right]);
   }
+}
+
+async function summarizeWithOpenClaw(
+  threads: PreparedSummaryThread[],
+  config: SurfaceConfig,
+): Promise<Map<string, SummaryShape | null>> {
+  const summaries = new Map<string, SummaryShape | null>();
+
+  for (const batch of buildOpenClawBatches(threads)) {
+    try {
+      const parsed = await summarizeOpenClawBatch(batch, config);
+      for (const thread of batch) {
+        summaries.set(thread.thread.thread_ref, parsed.get(thread.thread.thread_ref) ?? null);
+      }
+    } catch {
+      for (const thread of batch) {
+        summaries.set(thread.thread.thread_ref, null);
+      }
+    }
+  }
+
+  return summaries;
+}
+
+async function resolveSummaryTarget(config: SurfaceConfig): Promise<SummaryTarget> {
+  if (config.summarizerBackend === "openrouter") {
+    return {
+      backend: "openrouter",
+      model: config.summarizerModel,
+    };
+  }
+
+  const agentId = process.env.SURFACE_OPENCLAW_AGENT ?? "main";
+  return {
+    backend: "openclaw",
+    model: `openclaw/agent:${agentId}`,
+  };
+}
+
+export async function summarizeAndPersistThreads(
+  threads: NormalizedThreadRecord[],
+  config: SurfaceConfig,
+  db: SurfaceDatabase,
+): Promise<NormalizedThreadRecord[]> {
+  if (config.summarizerBackend === "none") {
+    return threads;
+  }
+
+  const target = await resolveSummaryTarget(config);
+  const preparedThreads = threads.map((thread) => prepareThread(thread, config));
+  const summaries = new Map<string, ThreadSummary | null>();
+  const pending: PreparedSummaryThread[] = [];
+
+  for (const prepared of preparedThreads) {
+    const stored = db.findStoredSummary(prepared.thread.thread_ref);
+    if (
+      stored
+      && stored.backend === target.backend
+      && stored.model === target.model
+      && stored.fingerprint === prepared.fingerprint
+    ) {
+      summaries.set(prepared.thread.thread_ref, {
+        backend: stored.backend,
+        model: stored.model,
+        brief: stored.brief,
+        needs_action: Boolean(stored.needs_action),
+        importance: stored.importance,
+      });
+      continue;
+    }
+
+    pending.push(prepared);
+  }
+
+  if (pending.length > 0) {
+    if (target.backend === "openrouter") {
+      for (const prepared of pending) {
+        try {
+          const parsed = await summarizeWithOpenRouter(prepared.payload, config);
+          const summary: ThreadSummary = {
+            backend: target.backend,
+            model: target.model,
+            brief: parsed.brief,
+            needs_action: parsed.needs_action,
+            importance: parsed.importance,
+          };
+          db.upsertSummary(prepared.thread.thread_ref, summary, prepared.fingerprint);
+          summaries.set(prepared.thread.thread_ref, summary);
+        } catch {
+          db.clearSummary(prepared.thread.thread_ref);
+          summaries.set(prepared.thread.thread_ref, null);
+        }
+      }
+    } else {
+      const parsed = await summarizeWithOpenClaw(pending, config);
+      for (const prepared of pending) {
+        const summaryShape = parsed.get(prepared.thread.thread_ref) ?? null;
+        if (summaryShape) {
+          const summary: ThreadSummary = {
+            backend: target.backend,
+            model: target.model,
+            brief: summaryShape.brief,
+            needs_action: summaryShape.needs_action,
+            importance: summaryShape.importance,
+          };
+          db.upsertSummary(prepared.thread.thread_ref, summary, prepared.fingerprint);
+          summaries.set(prepared.thread.thread_ref, summary);
+          continue;
+        }
+
+        db.clearSummary(prepared.thread.thread_ref);
+        summaries.set(prepared.thread.thread_ref, null);
+      }
+    }
+  }
+
+  return threads.map((thread) => ({
+    ...thread,
+    summary: summaries.get(thread.thread_ref) ?? null,
+  }));
 }
