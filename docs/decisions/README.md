@@ -51,3 +51,4 @@ Use zero-padded sequential numbers:
 - `0027-remote-auth-uses-one-cli-flag-with-provider-specific-behavior.md`
 - `0028-inline-attachments-are-surfaced-in-body-text.md`
 - `0029-gmail-rsvp-uses-google-calendar-api.md`
+- `0030-thread-get-and-structured-search-filters.md`

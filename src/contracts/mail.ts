@@ -86,7 +86,11 @@ export interface ThreadResult {
 }
 
 export interface SearchQuery {
-  text: string;
+  text?: string;
+  from?: string;
+  subject?: string;
+  mailbox?: string;
+  labels?: string[];
   limit: number;
   unread_only: boolean;
 }
@@ -103,10 +107,25 @@ export interface SearchResultEnvelope {
   account: string;
   query: {
     text?: string;
+    from?: string;
+    subject?: string;
+    mailbox?: string;
+    labels?: string[];
     limit: number;
     unread_only: boolean;
   };
   threads: ThreadResult[];
+}
+
+export interface ThreadGetResultEnvelope {
+  schema_version: "1";
+  command: "thread-get";
+  account: string;
+  thread_ref: string;
+  cache: {
+    status: "hit" | "refreshed";
+  };
+  thread: ThreadResult;
 }
 
 export interface ReadResultEnvelope {

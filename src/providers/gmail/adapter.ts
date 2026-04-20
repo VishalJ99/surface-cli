@@ -147,6 +147,95 @@ function gmailMailbox(labels: string[]): string {
   return "archive";
 }
 
+function quoteGmailSearchValue(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return '""';
+  }
+  return /[\s"]/u.test(normalized) ? `"${normalized.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : normalized;
+}
+
+function gmailMailboxSearchOperator(mailbox: string): string {
+  const normalized = mailbox.trim().toLowerCase();
+  switch (normalized) {
+    case "drafts":
+      return "in:drafts";
+    case "sent":
+      return "in:sent";
+    case "trash":
+      return "in:trash";
+    case "spam":
+      return "in:spam";
+    case "inbox":
+      return "in:inbox";
+    case "archive":
+      return "in:archive";
+    default:
+      return `in:${quoteGmailSearchValue(normalized)}`;
+  }
+}
+
+function gmailLabelSearchOperator(label: string): string {
+  const normalized = normalizeLabel(label);
+  switch (normalized) {
+    case "unread":
+      return "is:unread";
+    case "read":
+      return "is:read";
+    case "starred":
+      return "is:starred";
+    case "important":
+      return "label:important";
+    case "inbox":
+    case "sent":
+    case "drafts":
+    case "trash":
+    case "spam":
+    case "archive":
+      return gmailMailboxSearchOperator(normalized);
+    default:
+      return `label:${quoteGmailSearchValue(normalized)}`;
+  }
+}
+
+function buildGmailSearchQuery(query: SearchQuery): string | undefined {
+  const parts: string[] = [];
+  if (query.text?.trim()) {
+    parts.push(query.text.trim());
+  }
+  if (query.from?.trim()) {
+    parts.push(`from:${quoteGmailSearchValue(query.from)}`);
+  }
+  if (query.subject?.trim()) {
+    parts.push(`subject:${quoteGmailSearchValue(query.subject)}`);
+  }
+  if (query.mailbox?.trim()) {
+    parts.push(gmailMailboxSearchOperator(query.mailbox));
+  }
+  for (const label of query.labels ?? []) {
+    if (!label.trim()) {
+      continue;
+    }
+    parts.push(gmailLabelSearchOperator(label));
+  }
+  return parts.length > 0 ? parts.join(" ").trim() : undefined;
+}
+
+function threadMatchesStructuredFilters(thread: NormalizedThreadRecord, query: SearchQuery): boolean {
+  if (query.mailbox?.trim() && thread.envelope.mailbox.trim().toLowerCase() !== query.mailbox.trim().toLowerCase()) {
+    return false;
+  }
+
+  if ((query.labels?.length ?? 0) > 0) {
+    const available = new Set(thread.envelope.labels.map((label) => label.trim().toLowerCase()));
+    if ((query.labels ?? []).some((label) => !available.has(label.trim().toLowerCase()))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function partSizeBytes(part: GmailPart): number | null {
   if (typeof part.body?.size === "number") {
     return part.body.size;
@@ -1290,11 +1379,13 @@ export class GmailApiAdapter implements MailProviderAdapter {
   }
 
   async search(account: MailAccount, query: SearchQuery, context: ProviderContext): Promise<NormalizedThreadRecord[]> {
-    return fetchGmailThreads(account, context, {
+    const queryText = buildGmailSearchQuery(query);
+    const threads = await fetchGmailThreads(account, context, {
       kind: "search",
-      queryText: query.text,
+      ...(queryText ? { queryText } : {}),
       limit: query.limit,
     });
+    return threads.filter((thread) => threadMatchesStructuredFilters(thread, query)).slice(0, query.limit);
   }
 
   async fetchUnread(
@@ -1306,6 +1397,30 @@ export class GmailApiAdapter implements MailProviderAdapter {
       kind: "fetch-unread",
       limit: query.limit,
     });
+  }
+
+  async refreshThread(
+    account: MailAccount,
+    threadRef: string,
+    context: ProviderContext,
+  ): Promise<void> {
+    const locatorRow = context.db.findProviderLocator("thread", threadRef);
+    if (!locatorRow) {
+      throw new SurfaceError("cache_miss", `No provider locator exists for thread '${threadRef}'.`, {
+        account: account.name,
+        threadRef,
+      });
+    }
+
+    const locator = JSON.parse(locatorRow.locator_json) as { thread_id?: string | null };
+    if (!locator.thread_id) {
+      throw new SurfaceError("transport_error", `Thread '${threadRef}' is missing a Gmail thread id.`, {
+        account: account.name,
+        threadRef,
+      });
+    }
+
+    await fetchAndPersistGmailThread(account, context, locator.thread_id);
   }
 
   async readMessage(

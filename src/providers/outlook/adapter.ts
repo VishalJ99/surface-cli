@@ -38,6 +38,7 @@ import {
   applySearchQuery,
   applyUnreadFilter,
   captureOutlookServiceSession,
+  collectCurrentConversationIds,
   collectSearchConversationIds,
   collectUnreadConversationIds,
   fetchConversationBundle,
@@ -109,6 +110,43 @@ function uniqueParticipants(messages: MessageEnvelope[]): ThreadParticipant[] {
   }
 
   return participants;
+}
+
+function quoteOutlookSearchValue(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return '""';
+  }
+  return /[\s"]/u.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized;
+}
+
+function buildOutlookSearchQuery(query: SearchQuery): string | undefined {
+  const parts: string[] = [];
+  if (query.text?.trim()) {
+    parts.push(query.text.trim());
+  }
+  if (query.from?.trim()) {
+    parts.push(`from:${quoteOutlookSearchValue(query.from)}`);
+  }
+  if (query.subject?.trim()) {
+    parts.push(`subject:${quoteOutlookSearchValue(query.subject)}`);
+  }
+  return parts.length > 0 ? parts.join(" AND ") : undefined;
+}
+
+function threadMatchesStructuredFilters(thread: NormalizedThreadRecord, query: SearchQuery): boolean {
+  if (query.mailbox?.trim() && thread.envelope.mailbox.trim().toLowerCase() !== query.mailbox.trim().toLowerCase()) {
+    return false;
+  }
+
+  if ((query.labels?.length ?? 0) > 0) {
+    const available = new Set(thread.envelope.labels.map((label) => label.trim().toLowerCase()));
+    if ((query.labels ?? []).some((label) => !available.has(label.trim().toLowerCase()))) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function inferThreadRsvpStatus(messages: NormalizedMessageRecord[]): string | null {
@@ -355,6 +393,10 @@ interface OutlookAttachmentLocator {
   message_key: string | null;
 }
 
+interface OutlookThreadLocator {
+  conversation_id: string;
+}
+
 function parseOutlookMessageLocator(locatorJson: string): OutlookMessageLocator {
   const locator = JSON.parse(locatorJson) as Record<string, unknown>;
   const stringOrNull = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
@@ -369,6 +411,13 @@ function parseOutlookMessageLocator(locatorJson: string): OutlookMessageLocator 
     associated_calendar_change_key: stringOrNull(locator.associated_calendar_change_key),
     meeting_start: stringOrNull(locator.meeting_start),
     meeting_end: stringOrNull(locator.meeting_end),
+  };
+}
+
+function parseOutlookThreadLocator(locatorJson: string): OutlookThreadLocator {
+  const locator = JSON.parse(locatorJson) as Record<string, unknown>;
+  return {
+    conversation_id: typeof locator.conversation_id === "string" ? locator.conversation_id : "",
   };
 }
 
@@ -1362,7 +1411,14 @@ function buildReadEnvelope(
 async function fetchOutlookThreads(
   account: MailAccount,
   context: ProviderContext,
-  options: { kind: "search" | "fetch-unread"; queryText?: string; limit: number; summarize?: boolean },
+  options: {
+    kind: "search" | "fetch-unread" | "browse-current-folder";
+    queryText?: string;
+    limit: number;
+    fetchLimit?: number;
+    summarize?: boolean;
+    postFilter?: (thread: NormalizedThreadRecord) => boolean;
+  },
 ): Promise<NormalizedThreadRecord[]> {
   const profileDir = outlookProfileDir(context);
   if (!existsSync(profileDir)) {
@@ -1381,10 +1437,12 @@ async function fetchOutlookThreads(
     let conversationIds: string[];
     if (options.kind === "fetch-unread") {
       await applyUnreadFilter(page);
-      conversationIds = await collectUnreadConversationIds(page, options.limit);
+      conversationIds = await collectUnreadConversationIds(page, options.fetchLimit ?? options.limit);
+    } else if (options.kind === "browse-current-folder") {
+      conversationIds = await collectCurrentConversationIds(page, options.fetchLimit ?? options.limit);
     } else {
       await applySearchQuery(page, options.queryText ?? "");
-      conversationIds = await collectSearchConversationIds(page, options.limit);
+      conversationIds = await collectSearchConversationIds(page, options.fetchLimit ?? options.limit);
     }
 
     const bundles: OutlookThreadBundle[] = [];
@@ -1393,8 +1451,10 @@ async function fetchOutlookThreads(
     }
 
     const normalized = bundles.map((bundle) => normalizeThread(bundle));
+    const filtered = options.postFilter ? normalized.filter(options.postFilter) : normalized;
+    const limited = filtered.slice(0, options.limit);
     const summarized =
-      options.summarize === false ? normalized : await maybeSummarizeThreads(normalized, context);
+      options.summarize === false ? limited : await maybeSummarizeThreads(limited, context);
     return await persistThreads(account, context, summarized);
   } finally {
     await session.context.close();
@@ -1504,11 +1564,28 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
   }
 
   async search(account: MailAccount, query: SearchQuery, context: ProviderContext): Promise<NormalizedThreadRecord[]> {
-    return fetchOutlookThreads(account, context, {
-      kind: "search",
-      queryText: query.text,
+    const queryText = buildOutlookSearchQuery(query);
+    const normalizedLabels = new Set((query.labels ?? []).map((label) => label.trim().toLowerCase()).filter(Boolean));
+    const postFilter = (thread: NormalizedThreadRecord) => threadMatchesStructuredFilters(thread, query);
+
+    if (!queryText && normalizedLabels.has("unread")) {
+      const threads = await fetchOutlookThreads(account, context, {
+        kind: "fetch-unread",
+        limit: query.limit,
+        fetchLimit: Math.min(Math.max(query.limit * 3, query.limit), 100),
+        postFilter,
+      });
+      return threads.slice(0, query.limit);
+    }
+
+    const threads = await fetchOutlookThreads(account, context, {
+      kind: queryText ? "search" : "browse-current-folder",
+      ...(queryText ? { queryText } : {}),
       limit: query.limit,
+      fetchLimit: Math.min(Math.max(query.limit * 3, query.limit), 100),
+      postFilter,
     });
+    return threads.slice(0, query.limit);
   }
 
   async fetchUnread(
@@ -1520,6 +1597,30 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       kind: "fetch-unread",
       limit: query.limit,
     });
+  }
+
+  async refreshThread(
+    account: MailAccount,
+    threadRef: string,
+    context: ProviderContext,
+  ): Promise<void> {
+    const locatorRow = context.db.findProviderLocator("thread", threadRef);
+    if (!locatorRow) {
+      throw new SurfaceError("cache_miss", `No provider locator exists for thread '${threadRef}'.`, {
+        account: account.name,
+        threadRef,
+      });
+    }
+
+    const locator = parseOutlookThreadLocator(locatorRow.locator_json);
+    if (!locator.conversation_id) {
+      throw new SurfaceError("transport_error", `Thread '${threadRef}' is missing an Outlook conversation id.`, {
+        account: account.name,
+        threadRef,
+      });
+    }
+
+    await refreshOutlookConversation(account, locator.conversation_id, context);
   }
 
   async readMessage(

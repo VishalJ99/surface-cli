@@ -49,6 +49,11 @@ export interface MailProviderAdapter {
     query: FetchUnreadQuery,
     context: ProviderContext,
   ): Promise<NormalizedThreadRecord[]>;
+  refreshThread(
+    account: MailAccount,
+    threadRef: string,
+    context: ProviderContext,
+  ): Promise<void>;
   readMessage(
     account: MailAccount,
     messageRef: string,

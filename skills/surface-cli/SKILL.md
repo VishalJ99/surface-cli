@@ -1,6 +1,6 @@
 ---
 name: surface-cli
-description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP or require admin setup, plus stable refs for unread fetch, search, read, attachments, send or draft, archive, mark read or unread, and Outlook RSVP."
+description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP or require admin setup, plus stable refs for unread fetch, structured search, thread refresh, message read, attachments, send or draft, archive, mark read or unread, and Outlook RSVP."
 metadata:
   {
     "openclaw":
@@ -33,7 +33,7 @@ changes. Surface prints machine-readable JSON to stdout and stores local state i
 
 - the user wants to read or triage email from Gmail or Outlook
 - the user needs a provider-neutral CLI for search, unread fetch, read, attachments, or actions
-- you need stable `thread_ref` / `message_ref` values for follow-up commands
+- you need stable `thread_ref` / `message_ref` values for follow-up commands or thread watching
 
 ## Prerequisites
 
@@ -98,7 +98,16 @@ surface mail fetch-unread --account personal_2 --limit 20
 
 ```bash
 surface mail search --account uni --text "invoice" --limit 10
+surface mail search --account uni --from registrar@school.edu --subject "waitlist" --limit 10
+surface mail search --account personal_2 --mailbox inbox --label unread --text "sale" --limit 10
 surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
+```
+
+### Read One Thread
+
+```bash
+surface mail thread get thr_01...
+surface mail thread get thr_01... --refresh
 ```
 
 ### Read One Message
@@ -141,13 +150,16 @@ surface mail rsvp msg_01... --response accept
 1. Start with `surface account list` if the target account is unclear.
 2. Use `surface auth status` before assuming a provider is ready.
 3. For triage, prefer `fetch-unread` or `search` and inspect the returned thread/message refs.
-4. Read only the messages you need with `surface mail read <message_ref>`.
-5. Act using refs from Surface output. Do not rely on array positions from previous JSON.
+4. Use `surface mail thread get <thread_ref> --refresh` when you need the latest full state of one watched conversation.
+5. Read only the messages you need with `surface mail read <message_ref>`.
+6. Act using refs from Surface output. Do not rely on array positions from previous JSON.
 
 ## Important Rules
 
 - Surface outputs JSON on stdout. Parse it instead of scraping terminal text.
 - Use `message_ref` and `thread_ref` for follow-up commands.
+- `search` accepts structured filters for sender, subject, mailbox, and labels in addition to raw `--text`.
+- `thread get --refresh` is the thread-level live refresh path for automations that watch a specific conversation.
 - `read` is cache-first by default. Use `--refresh` when you need live provider state.
 - `read` does not download attachments. Use `surface attachment download`.
 - `fetch-unread` and `search` do not mutate mailbox state.
@@ -174,7 +186,8 @@ surface mail rsvp msg_01... --response accept
 surface account list
 surface auth status
 surface mail fetch-unread --account uni --limit 10
-surface mail search --account personal_2 --text 'has:attachment newer_than:30d' --limit 5
+surface mail search --account personal_2 --from alerts@example.com --subject 'discount' --mailbox inbox --label unread --limit 5
+surface mail thread get thr_01... --refresh
 surface mail read msg_01...
 surface mail read msg_01... --mark-read
 surface attachment list msg_01...

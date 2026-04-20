@@ -391,6 +391,17 @@ export async function collectUnreadConversationIds(
   return rows.map((row) => row.conversationId).filter(Boolean);
 }
 
+export async function collectCurrentConversationIds(
+  page: Page,
+  limit: number,
+): Promise<string[]> {
+  const rows = await collectRows(page, {
+    keyForRow: conversationRowKey,
+    maxResults: limit,
+  });
+  return rows.map((row) => row.conversationId).filter(Boolean);
+}
+
 export async function collectSearchConversationIds(
   page: Page,
   limit: number,

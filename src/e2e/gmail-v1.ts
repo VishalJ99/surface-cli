@@ -11,6 +11,7 @@ import type {
   RsvpResultEnvelope,
   SearchResultEnvelope,
   SendResultEnvelope,
+  ThreadGetResultEnvelope,
   ThreadResult,
 } from "../contracts/mail.js";
 
@@ -255,6 +256,24 @@ async function main(): Promise<void> {
   const baseMessageCount = sentThread.messages.length;
   console.log(`search: found thread ${sentThread.thread_ref} with ${baseMessageCount} message(s)`);
 
+  const subjectSearch = await runSurfaceJson<SearchResultEnvelope>(
+    ["mail", "search", "--account", account, "--subject", baseSubject, "--limit", "10"],
+    childEnv,
+  );
+  assert(
+    subjectSearch.threads.some((thread) => thread.thread_ref === sendResult.thread_ref),
+    "structured subject search did not return the sent Gmail thread",
+  );
+  console.log("search --subject: verified structured search path");
+
+  const cachedThread = await runSurfaceJson<ThreadGetResultEnvelope>(
+    ["mail", "thread", "get", sendResult.thread_ref],
+    childEnv,
+  );
+  assert(cachedThread.thread.thread_ref === sendResult.thread_ref, "thread get returned the wrong Gmail thread");
+  assert(cachedThread.thread.messages.length >= 1, "thread get did not return any Gmail messages");
+  console.log("thread get: verified cached thread lookup");
+
   const readResult = await runSurfaceJson<ReadResultEnvelope>(
     ["mail", "read", sendResult.message_ref],
     childEnv,
@@ -279,6 +298,17 @@ async function main(): Promise<void> {
     (thread) => thread.messages.length > baseMessageCount,
   );
   console.log(`reply: thread now has ${repliedThread.messages.length} message(s)`);
+
+  const refreshedThread = await runSurfaceJson<ThreadGetResultEnvelope>(
+    ["mail", "thread", "get", sendResult.thread_ref, "--refresh"],
+    childEnv,
+  );
+  assert(refreshedThread.cache.status === "refreshed", "thread get --refresh did not report refreshed status");
+  assert(
+    refreshedThread.thread.messages.length >= repliedThread.messages.length,
+    "thread get --refresh did not expose the refreshed Gmail thread state",
+  );
+  console.log("thread get --refresh: verified live thread refresh");
 
   const replyAllResult = await runSurfaceJson<SendResultEnvelope>(
     ["mail", "reply-all", sendResult.message_ref, "--body", replyAllBody],

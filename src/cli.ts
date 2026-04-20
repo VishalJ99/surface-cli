@@ -9,6 +9,7 @@ import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
 import { runRemoteAuthLogin } from "./lib/remote-auth.js";
+import { loadStoredThread, threadHasReadableCache } from "./lib/stored-mail.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { resolveProviderAdapter } from "./providers/index.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
@@ -27,6 +28,14 @@ function positiveInt(value: string): number {
 
 function collectStringOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function directorySizeBytes(rootPath: string): number {
@@ -137,6 +146,33 @@ async function runMessageBatchAction(
     const account = context.db.findAccountById(accountId);
     if (!account) {
       throw new SurfaceError("not_found", `Account for the provided message refs was not found.`);
+    }
+
+    await action(createAccountRuntimeContext(context, account), resolved);
+  });
+}
+
+async function runThreadAction(
+  options: GlobalOptions,
+  threadRef: string,
+  action: (
+    context: ReturnType<typeof createAccountRuntimeContext>,
+    resolved: { thread_ref: string; account_id: string },
+  ) => Promise<void> | void,
+): Promise<void> {
+  await runAction(options, async (context) => {
+    const resolved = context.db.findThreadByRef(threadRef);
+    if (!resolved) {
+      throw new SurfaceError("not_found", `Thread '${threadRef}' was not found.`, {
+        threadRef,
+      });
+    }
+
+    const account = context.db.findAccountById(resolved.account_id);
+    if (!account) {
+      throw new SurfaceError("not_found", `Account for thread '${threadRef}' was not found.`, {
+        threadRef,
+      });
     }
 
     await action(createAccountRuntimeContext(context, account), resolved);
@@ -297,34 +333,48 @@ const mailCommand = program.command("mail").description("Search, fetch, and read
 mailCommand
   .command("search")
   .requiredOption("--account <account>", "Logical account name")
-  .requiredOption("--text <query>", "Free-text search query")
+  .option("--text <query>", "Free-text search query")
+  .option("--from <sender>", "Sender filter")
+  .option("--subject <subject>", "Subject filter")
+  .option("--mailbox <mailbox>", "Mailbox filter")
+  .option("--label <label>", "Label filter", collectStringOption, [])
   .addOption(new Option("--limit <limit>", "Max results to return").argParser(positiveInt))
   .action(async (options, command: Command) => {
     await runAccountAction(
       command.optsWithGlobals<GlobalOptions>(),
       options.account,
       async (context) => {
+        const labels = (options.label as string[] | undefined)?.map((label) => label.trim()).filter(Boolean) ?? [];
+        const text = normalizeOptionalString(options.text);
+        const from = normalizeOptionalString(options.from);
+        const subject = normalizeOptionalString(options.subject);
+        const mailbox = normalizeOptionalString(options.mailbox);
+        const query = {
+          ...(text ? { text } : {}),
+          ...(from ? { from } : {}),
+          ...(subject ? { subject } : {}),
+          ...(mailbox ? { mailbox } : {}),
+          ...(labels.length > 0 ? { labels } : {}),
+          limit: options.limit ?? context.config.defaultResultLimit,
+          unread_only: false as const,
+        };
+        if (!query.text && !query.from && !query.subject && !query.mailbox && !query.labels) {
+          throw new SurfaceError(
+            "invalid_argument",
+            "Search requires at least one of --text, --from, --subject, --mailbox, or --label.",
+            { account: context.account.name },
+          );
+        }
+
         const adapter = resolveProviderAdapter(context.account);
-        const threads = await adapter.search(
-          context.account,
-          {
-            text: options.text,
-            limit: options.limit ?? context.config.defaultResultLimit,
-            unread_only: false,
-          },
-          context,
-        );
+        const threads = await adapter.search(context.account, query, context);
 
         writeJson({
           schema_version: "1",
           command: "search",
           generated_at: nowIsoUtc(),
           account: context.account.name,
-          query: {
-            text: options.text,
-            limit: options.limit ?? context.config.defaultResultLimit,
-            unread_only: false,
-          },
+          query,
           threads: threads.map(toPublicThread),
         });
       },
@@ -360,6 +410,46 @@ mailCommand
             unread_only: true,
           },
           threads: threads.map(toPublicThread),
+        });
+      },
+    );
+  });
+
+mailCommand
+  .command("thread")
+  .description("Inspect thread state.")
+  .command("get")
+  .argument("<thread_ref>", "Stable thread ref")
+  .option("--refresh", "Bypass local cache and fetch live", false)
+  .action(async (threadRef: string, options, command: Command) => {
+    await runThreadAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      threadRef,
+      async (context) => {
+        const adapter = resolveProviderAdapter(context.account);
+        let cacheStatus: "hit" | "refreshed" = "hit";
+        if (Boolean(options.refresh) || !threadHasReadableCache(context.db, threadRef)) {
+          await adapter.refreshThread(context.account, threadRef, context);
+          cacheStatus = "refreshed";
+        }
+
+        const thread = loadStoredThread(context.db, context.account, threadRef);
+        if (!thread) {
+          throw new SurfaceError("not_found", `Thread '${threadRef}' was not found.`, {
+            account: context.account.name,
+            threadRef,
+          });
+        }
+
+        writeJson({
+          schema_version: "1",
+          command: "thread-get",
+          account: context.account.name,
+          thread_ref: threadRef,
+          cache: {
+            status: cacheStatus,
+          },
+          thread,
         });
       },
     );

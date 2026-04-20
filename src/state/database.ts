@@ -25,6 +25,19 @@ export interface StoredMessageRecord {
   invite_json: string | null;
 }
 
+export interface StoredThreadRecord {
+  thread_ref: string;
+  account_id: string;
+  subject: string | null;
+  mailbox: string | null;
+  participants_json: string;
+  labels_json: string;
+  received_at: string | null;
+  message_count: number;
+  unread_count: number;
+  has_attachments: number;
+}
+
 export interface StoredProviderLocator {
   entity_kind: string;
   entity_ref: string;
@@ -800,6 +813,29 @@ export class SurfaceDatabase {
       .get(messageRef) as StoredMessageRecord | undefined;
   }
 
+  getStoredThread(threadRef: string): StoredThreadRecord | undefined {
+    return this.connection
+      .prepare(
+        `
+        SELECT
+          thread_ref,
+          account_id,
+          subject,
+          mailbox,
+          participants_json,
+          labels_json,
+          received_at,
+          message_count,
+          unread_count,
+          has_attachments
+        FROM threads
+        WHERE thread_ref = ?
+        LIMIT 1
+        `,
+      )
+      .get(threadRef) as StoredThreadRecord | undefined;
+  }
+
   updateInviteStatusForThread(threadRef: string, responseStatus: string | null): void {
     this.updateInviteForThread(threadRef, { response_status: responseStatus });
   }
@@ -853,6 +889,37 @@ export class SurfaceDatabase {
         )
         .all(threadRef) as Array<{ message_ref: string }>
     ).map((row) => row.message_ref);
+  }
+
+  listStoredMessagesForThread(threadRef: string): StoredMessageRecord[] {
+    return this.connection
+      .prepare(
+        `
+        SELECT
+          m.message_ref,
+          m.account_id,
+          m.thread_ref,
+          m.subject,
+          m.from_name,
+          m.from_email,
+          m.to_json,
+          m.cc_json,
+          m.sent_at,
+          m.received_at,
+          m.unread,
+          m.snippet,
+          m.body_cache_path,
+          m.body_cached,
+          m.body_truncated,
+          m.body_cached_bytes,
+          m.invite_json
+        FROM thread_messages tm
+        INNER JOIN messages m ON m.message_ref = tm.message_ref
+        WHERE tm.thread_ref = ?
+        ORDER BY tm.position ASC
+        `,
+      )
+      .all(threadRef) as StoredMessageRecord[];
   }
 
   markThreadArchived(threadRef: string): void {
@@ -949,6 +1016,27 @@ export class SurfaceDatabase {
       .get(messageRef) as
       | {
           message_ref: string;
+          thread_ref: string;
+          account_id: string;
+        }
+      | undefined;
+  }
+
+  findThreadByRef(threadRef: string): {
+    thread_ref: string;
+    account_id: string;
+  } | undefined {
+    return this.connection
+      .prepare(
+        `
+        SELECT thread_ref, account_id
+        FROM threads
+        WHERE thread_ref = ?
+        LIMIT 1
+        `,
+      )
+      .get(threadRef) as
+      | {
           thread_ref: string;
           account_id: string;
         }

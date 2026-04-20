@@ -24,6 +24,7 @@ Each provider implementation must support:
 - account auth lifecycle
 - search
 - fetch-unread
+- refresh thread
 - read message
 - send
 - reply
@@ -51,6 +52,7 @@ interface MailProviderAdapter {
 
   search(account: MailAccount, query: SearchQuery): Promise<ThreadResult[]>;
   fetchUnread(account: MailAccount, query: FetchUnreadQuery): Promise<ThreadResult[]>;
+  refreshThread(account: MailAccount, threadRef: string): Promise<void>;
   readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<ReadResultEnvelope>;
   sendMessage(account: MailAccount, input: SendMessageInput): Promise<SendResultEnvelope>;
   reply(account: MailAccount, messageRef: string, input: ReplyInput): Promise<SendResultEnvelope>;
@@ -84,7 +86,7 @@ Provider-specific payloads must be mapped into:
 - normalized envelope data
 - normalized body text
 - attachment metadata
-- provider locator data stored internally for later reads/actions
+- provider locator data stored internally for later thread reads, message reads, and actions
 
 Public JSON must not leak transport-specific field names unless explicitly documented.
 
@@ -150,6 +152,7 @@ At minimum:
 - account identifier
 - mailbox or folder hint when useful
 - any transport-specific locator required for subsequent read/download/action calls
+- any transport-specific locator required for subsequent thread refresh calls
 
 These locators are internal storage concerns and should not be exposed in the public stdout JSON contract.
 

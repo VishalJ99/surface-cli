@@ -27,7 +27,9 @@ surface auth status
 surface auth logout school
 
 surface mail fetch-unread --account work --limit 25
-surface mail search --account work --text invoice --limit 10
+surface mail search --account work --text invoice --subject overdue --limit 10
+surface mail search --account work --from billing@vendor.com --mailbox inbox --label unread --limit 10
+surface mail thread get thr_01...
 surface mail read msg_01...
 surface mail send --account school --to me@example.com --subject "hello" --body "test"
 surface mail send --account school --to me@example.com --subject "hello" --body "test" --draft
@@ -50,6 +52,7 @@ surface cache clear --account work
 - `fetch-unread` is the public command name.
 - Threads are the top-level result unit.
 - Messages are elements within a thread.
+- `thread get` takes a stable `thread_ref`.
 - `read` takes a stable `message_ref`.
 - Attachment download is separate from `read`.
 - Machine-facing commands emit JSON on stdout.
@@ -72,9 +75,9 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - adapter registry for `gmail-api` and `outlook-web-playwright`
 - donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
 - Gmail OAuth login wired to Google desktop-app OAuth with stored refresh tokens under `~/.surface-cli/auth/<account_id>/gmail-token.json`
-- live Gmail `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
+- live Gmail `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
-- live Outlook `fetch-unread`, `search`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
+- live Outlook `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - summary backends for `openrouter` and `openclaw`
 - lean opt-in Outlook v1 and Gmail v1 live e2e coverage via `npm run e2e:outlook-v1` and `npm run e2e:gmail-v1`
 

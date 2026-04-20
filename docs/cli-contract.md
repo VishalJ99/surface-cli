@@ -72,8 +72,9 @@ Example remote auth login result:
 
 ### Mail
 
-- `surface mail search ...`
+- `surface mail search --account <account> [--text <query>] [--from <sender>] [--subject <subject>] [--mailbox <mailbox>] [--label <label>]...`
 - `surface mail fetch-unread ...`
+- `surface mail thread get <thread_ref> [--refresh]`
 - `surface mail read <message_ref> [--mark-read]`
 - `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--draft]`
 - `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
@@ -102,6 +103,7 @@ Example remote auth login result:
 - `fetch-unread` is the public command name.
 - Threads are the top-level result unit.
 - Messages are elements within a thread.
+- `thread get` should accept a stable `thread_ref`.
 - `read` should accept a stable `message_ref`.
 - Commands should not require JSON paths into prior command output.
 - Refs should be opaque globally unique strings prefixed by entity kind.
@@ -270,6 +272,7 @@ Recommended example:
 ### `surface mail search`
 
 Same shape as `fetch-unread`, but `command = "search"` and `query` reflects the passed criteria.
+At least one of `--text`, `--from`, `--subject`, `--mailbox`, or `--label` is required.
 
 Example:
 
@@ -280,11 +283,102 @@ Example:
   "generated_at": "2026-04-03T09:20:10Z",
   "account": "work",
   "query": {
-    "text": "invoice",
+    "from": "billing@vendor.com",
+    "subject": "invoice",
+    "mailbox": "inbox",
+    "labels": ["unread"],
     "limit": 10,
     "unread_only": false
   },
   "threads": []
+}
+```
+
+### `surface mail thread get <thread_ref>`
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "thread-get",
+  "account": "work",
+  "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
+  "cache": {
+    "status": "refreshed"
+  },
+  "thread": {
+    "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
+    "source": {
+      "provider": "gmail",
+      "transport": "gmail-api"
+    },
+    "envelope": {
+      "subject": "Invoice INV-1042 overdue",
+      "participants": [
+        {
+          "name": "Vendor Billing",
+          "email": "billing@vendor.com",
+          "role": "from"
+        },
+        {
+          "name": "Vishal Jain",
+          "email": "recipient@example.com",
+          "role": "to"
+        }
+      ],
+      "mailbox": "inbox",
+      "labels": ["inbox", "unread"],
+      "received_at": "2026-04-03T08:41:11Z",
+      "message_count": 1,
+      "unread_count": 1,
+      "has_attachments": true
+    },
+    "summary": {
+      "backend": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "brief": "Vendor invoice reminder requiring payment review.",
+      "needs_action": true,
+      "importance": "high"
+    },
+    "messages": [
+      {
+        "message_ref": "msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P",
+        "envelope": {
+          "from": {
+            "name": "Vendor Billing",
+            "email": "billing@vendor.com"
+          },
+          "to": [
+            {
+              "name": "Vishal Jain",
+              "email": "recipient@example.com"
+            }
+          ],
+          "cc": [],
+          "sent_at": "2026-04-03T08:40:57Z",
+          "received_at": "2026-04-03T08:41:11Z",
+          "unread": true
+        },
+        "snippet": "This is a reminder that invoice INV-1042 is now overdue and requires your attention.",
+        "body": {
+          "text": "This is a reminder that invoice INV-1042 is now overdue and requires your attention.\n\nPlease review the attached PDF and arrange payment.",
+          "truncated": false,
+          "cached": true,
+          "cached_bytes": 141
+        },
+        "attachments": [
+          {
+            "attachment_id": "att_01JQ6YJ3G4M7YJ6M2Y1P3A8S4T",
+            "filename": "invoice-1042.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": 48291,
+            "inline": false
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
