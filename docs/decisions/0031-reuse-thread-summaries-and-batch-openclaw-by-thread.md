@@ -26,6 +26,8 @@ Specifically:
 - reuse a stored summary when `backend`, `model`, and `fingerprint` all match
 - for OpenClaw, batch whole-thread payloads into bounded chunks instead of invoking one
   process per thread
+- default the OpenClaw batch caps to `3` threads and `64 KiB` of canonical summary input
+  based on follow-up benchmarking against the shipped `openclaw/agent:main` path
 - use low thinking for the default OpenClaw summary path
 - if a batch fails to parse or times out, split it recursively until either smaller batches
   succeed or a single-thread summary fails
@@ -42,6 +44,8 @@ across multiple summary requests.
 - repeated polling commands can approach the no-summary latency path when threads are unchanged
 - summary generation becomes more failure-tolerant because one bad batch can be retried as
   smaller batches
+- the batch defaults are tuned for the current OpenClaw wrapper behavior, not just the raw
+  model context size, so future backend changes may justify retuning them
 - summary rows in SQLite now include a fingerprint field
 - OpenClaw summaries must explicitly guard against cross-thread contamination because a
   single prompt can contain multiple threads

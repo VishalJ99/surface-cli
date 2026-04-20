@@ -8,8 +8,8 @@ import type { SurfaceDatabase } from "./state/database.js";
 
 const execFileAsync = promisify(execFile);
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENCLAW_BATCH_MAX_THREADS = 6;
-const OPENCLAW_BATCH_MAX_INPUT_BYTES = 32 * 1024;
+const OPENCLAW_BATCH_MAX_THREADS = 3;
+const OPENCLAW_BATCH_MAX_INPUT_BYTES = 64 * 1024;
 const OPENCLAW_SUMMARY_THINKING = "low";
 
 interface SummaryShape {
