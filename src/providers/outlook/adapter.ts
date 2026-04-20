@@ -33,7 +33,7 @@ import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
 import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.js";
-import { launchOutlookSession, probeOutlookAuth, promptForOutlookLogin } from "./session.js";
+import { launchOutlookSession, probeOutlookAuth, promptForOutlookLogin, type OutlookSession } from "./session.js";
 import {
   applySearchQuery,
   applyUnreadFilter,
@@ -58,6 +58,31 @@ import type { StoredMessageRecord } from "../../state/database.js";
 
 function outlookProfileDir(context: ProviderContext): string {
   return join(context.accountPaths.authDir, "profile");
+}
+
+async function withManagedOutlookSession<T>(
+  context: ProviderContext,
+  browserSession: OutlookSession | undefined,
+  work: (session: OutlookSession) => Promise<T>,
+): Promise<T> {
+  if (browserSession) {
+    return work(browserSession);
+  }
+
+  const profileDir = outlookProfileDir(context);
+  if (!existsSync(profileDir)) {
+    throw new SurfaceError("reauth_required", "Outlook profile directory is missing for this account.", {
+      account: null,
+    });
+  }
+
+  const session = await launchOutlookSession(profileDir, { headless: true });
+  try {
+    return await work(session);
+  } finally {
+    await session.context.close();
+    session.cleanup?.();
+  }
 }
 
 function threadProviderKey(conversationId: string): string {
@@ -645,30 +670,34 @@ async function persistThreads(
   });
 }
 
+async function refreshOutlookConversationWithSession(
+  account: MailAccount,
+  conversationId: string,
+  context: ProviderContext,
+  browserSession: OutlookSession,
+): Promise<void> {
+  const capturedSession = await captureOutlookServiceSession(browserSession.context, browserSession.page, {
+    timeoutMs: context.config.providerTimeoutMs,
+  });
+  const bundle = await fetchConversationBundle(browserSession.context.request, capturedSession, conversationId);
+  const persisted = await persistThreads(account, context, [normalizeThread(bundle)]);
+  await summarizeAndPersistThreads(persisted, context.config, context.db);
+}
+
 async function refreshOutlookConversation(
   account: MailAccount,
   conversationId: string,
   context: ProviderContext,
 ): Promise<void> {
-  const profileDir = outlookProfileDir(context);
-  const session = await launchOutlookSession(profileDir, { headless: true });
-  try {
-    const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
-      timeoutMs: context.config.providerTimeoutMs,
-    });
-    const bundle = await fetchConversationBundle(session.context.request, capturedSession, conversationId);
-    const persisted = await persistThreads(account, context, [normalizeThread(bundle)]);
-    await summarizeAndPersistThreads(persisted, context.config, context.db);
-  } finally {
-    await session.context.close();
-    session.cleanup?.();
-  }
+  await withManagedOutlookSession(context, undefined, (session) =>
+    refreshOutlookConversationWithSession(account, conversationId, context, session));
 }
 
-async function refreshStoredMessage(
+async function refreshStoredMessageWithSession(
   account: MailAccount,
   messageRef: string,
   context: ProviderContext,
+  browserSession: OutlookSession,
 ): Promise<StoredMessageRecord> {
   const locatorRow = context.db.findProviderLocator("message", messageRef);
   if (!locatorRow) {
@@ -683,10 +712,10 @@ async function refreshStoredMessage(
     throw new SurfaceError("transport_error", `Message '${messageRef}' is missing an Outlook conversation id.`, {
       account: account.name,
       messageRef,
-    });
+      });
   }
 
-  await refreshOutlookConversation(account, locator.conversation_id, context);
+  await refreshOutlookConversationWithSession(account, locator.conversation_id, context, browserSession);
   const refreshed = context.db.getStoredMessage(messageRef);
   if (!refreshed) {
     throw new SurfaceError("not_found", `Message '${messageRef}' could not be refreshed from Outlook.`, {
@@ -696,6 +725,15 @@ async function refreshStoredMessage(
   }
 
   return refreshed;
+}
+
+async function refreshStoredMessage(
+  account: MailAccount,
+  messageRef: string,
+  context: ProviderContext,
+): Promise<StoredMessageRecord> {
+  return withManagedOutlookSession(context, undefined, (session) =>
+    refreshStoredMessageWithSession(account, messageRef, context, session));
 }
 
 async function resolveRsvpLocator(
@@ -1387,6 +1425,49 @@ function buildReadEnvelope(
   };
 }
 
+async function fetchOutlookThreadsWithSession(
+  account: MailAccount,
+  context: ProviderContext,
+  browserSession: OutlookSession,
+  options: {
+    kind: "search" | "fetch-unread" | "browse-current-folder";
+    queryText?: string;
+    limit: number;
+    fetchLimit?: number;
+    summarize?: boolean;
+    postFilter?: (thread: NormalizedThreadRecord) => boolean;
+  },
+): Promise<NormalizedThreadRecord[]> {
+  const { context: playwrightContext, page } = browserSession;
+  const capturedSession = await captureOutlookServiceSession(playwrightContext, page, {
+    timeoutMs: context.config.providerTimeoutMs,
+  });
+
+  let conversationIds: string[];
+  if (options.kind === "fetch-unread") {
+    await applyUnreadFilter(page);
+    conversationIds = await collectUnreadConversationIds(page, options.fetchLimit ?? options.limit);
+  } else if (options.kind === "browse-current-folder") {
+    conversationIds = await collectCurrentConversationIds(page, options.fetchLimit ?? options.limit);
+  } else {
+    await applySearchQuery(page, options.queryText ?? "");
+    conversationIds = await collectSearchConversationIds(page, options.fetchLimit ?? options.limit);
+  }
+
+  const bundles: OutlookThreadBundle[] = [];
+  for (const conversationId of conversationIds) {
+    bundles.push(await fetchConversationBundle(playwrightContext.request, capturedSession, conversationId));
+  }
+
+  const normalized = bundles.map((bundle) => normalizeThread(bundle));
+  const filtered = options.postFilter ? normalized.filter(options.postFilter) : normalized;
+  const limited = filtered.slice(0, options.limit);
+  const persisted = await persistThreads(account, context, limited);
+  return options.summarize === false
+    ? persisted
+    : await summarizeAndPersistThreads(persisted, context.config, context.db);
+}
+
 async function fetchOutlookThreads(
   account: MailAccount,
   context: ProviderContext,
@@ -1406,40 +1487,127 @@ async function fetchOutlookThreads(
     });
   }
 
-  const session = await launchOutlookSession(profileDir, { headless: true });
-  try {
-    const { context: browserContext, page } = session;
-    const capturedSession = await captureOutlookServiceSession(browserContext, page, {
-      timeoutMs: context.config.providerTimeoutMs,
-    });
+  return withManagedOutlookSession(context, undefined, (session) =>
+    fetchOutlookThreadsWithSession(account, context, session, options));
+}
 
-    let conversationIds: string[];
-    if (options.kind === "fetch-unread") {
-      await applyUnreadFilter(page);
-      conversationIds = await collectUnreadConversationIds(page, options.fetchLimit ?? options.limit);
-    } else if (options.kind === "browse-current-folder") {
-      conversationIds = await collectCurrentConversationIds(page, options.fetchLimit ?? options.limit);
-    } else {
-      await applySearchQuery(page, options.queryText ?? "");
-      conversationIds = await collectSearchConversationIds(page, options.fetchLimit ?? options.limit);
-    }
+export async function searchOutlookWithSession(
+  account: MailAccount,
+  query: SearchQuery,
+  context: ProviderContext,
+  browserSession?: OutlookSession,
+): Promise<NormalizedThreadRecord[]> {
+  const queryText = buildOutlookSearchQuery(query);
+  const normalizedLabels = new Set((query.labels ?? []).map((label) => label.trim().toLowerCase()).filter(Boolean));
+  const postFilter = (thread: NormalizedThreadRecord) => threadMatchesStructuredFilters(thread, query);
 
-    const bundles: OutlookThreadBundle[] = [];
-    for (const conversationId of conversationIds) {
-      bundles.push(await fetchConversationBundle(browserContext.request, capturedSession, conversationId));
-    }
-
-    const normalized = bundles.map((bundle) => normalizeThread(bundle));
-    const filtered = options.postFilter ? normalized.filter(options.postFilter) : normalized;
-    const limited = filtered.slice(0, options.limit);
-    const persisted = await persistThreads(account, context, limited);
-    return options.summarize === false
-      ? persisted
-      : await summarizeAndPersistThreads(persisted, context.config, context.db);
-  } finally {
-    await session.context.close();
-    session.cleanup?.();
+  if (!queryText && normalizedLabels.has("unread")) {
+    const threads = await withManagedOutlookSession(context, browserSession, (session) =>
+      fetchOutlookThreadsWithSession(account, context, session, {
+        kind: "fetch-unread",
+        limit: query.limit,
+        fetchLimit: Math.min(Math.max(query.limit * 3, query.limit), 100),
+        postFilter,
+      }));
+    return threads.slice(0, query.limit);
   }
+
+  const threads = await withManagedOutlookSession(context, browserSession, (session) =>
+    fetchOutlookThreadsWithSession(account, context, session, {
+      kind: queryText ? "search" : "browse-current-folder",
+      ...(queryText ? { queryText } : {}),
+      limit: query.limit,
+      fetchLimit: Math.min(Math.max(query.limit * 3, query.limit), 100),
+      postFilter,
+    }));
+  return threads.slice(0, query.limit);
+}
+
+export async function fetchUnreadOutlookWithSession(
+  account: MailAccount,
+  query: FetchUnreadQuery,
+  context: ProviderContext,
+  browserSession?: OutlookSession,
+): Promise<NormalizedThreadRecord[]> {
+  return withManagedOutlookSession(context, browserSession, (session) =>
+    fetchOutlookThreadsWithSession(account, context, session, {
+      kind: "fetch-unread",
+      limit: query.limit,
+    }));
+}
+
+export async function refreshOutlookThreadWithSession(
+  account: MailAccount,
+  threadRef: string,
+  context: ProviderContext,
+  browserSession?: OutlookSession,
+): Promise<void> {
+  const locatorRow = context.db.findProviderLocator("thread", threadRef);
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for thread '${threadRef}'.`, {
+      account: account.name,
+      threadRef,
+    });
+  }
+
+  const locator = parseOutlookThreadLocator(locatorRow.locator_json);
+  if (!locator.conversation_id) {
+    throw new SurfaceError("transport_error", `Thread '${threadRef}' is missing an Outlook conversation id.`, {
+      account: account.name,
+      threadRef,
+    });
+  }
+
+  await withManagedOutlookSession(context, browserSession, (session) =>
+    refreshOutlookConversationWithSession(account, locator.conversation_id, context, session));
+}
+
+export async function readOutlookMessageWithSession(
+  account: MailAccount,
+  messageRef: string,
+  refresh: boolean,
+  context: ProviderContext,
+  browserSession?: OutlookSession,
+): Promise<ReadResultEnvelope> {
+  const stored = context.db.getStoredMessage(messageRef);
+  if (!stored) {
+    throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
+      account: account.name,
+      messageRef,
+    });
+  }
+
+  const attachments = context.db.listAttachmentsForMessage(messageRef).map((attachment) => ({
+    attachment_id: attachment.attachment_id,
+    filename: attachment.filename,
+    mime_type: attachment.mime_type,
+    size_bytes: attachment.size_bytes,
+    inline: Boolean(attachment.inline),
+  }));
+
+  const hasReadableCache = Boolean(stored.body_cache_path && existsSync(stored.body_cache_path));
+  if (!refresh && hasReadableCache) {
+    return buildReadEnvelope(account, messageRef, stored.thread_ref, parseStoredMessage(stored), attachments, "hit");
+  }
+
+  const refreshed = await withManagedOutlookSession(context, browserSession, (session) =>
+    refreshStoredMessageWithSession(account, messageRef, context, session));
+
+  const refreshedAttachments = context.db.listAttachmentsForMessage(messageRef).map((attachment) => ({
+    attachment_id: attachment.attachment_id,
+    filename: attachment.filename,
+    mime_type: attachment.mime_type,
+    size_bytes: attachment.size_bytes,
+    inline: Boolean(attachment.inline),
+  }));
+  return buildReadEnvelope(
+    account,
+    messageRef,
+    refreshed.thread_ref,
+    parseStoredMessage(refreshed),
+    refreshedAttachments,
+    "refreshed",
+  );
 }
 
 async function mutateOutlookReadState(
@@ -1544,28 +1712,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
   }
 
   async search(account: MailAccount, query: SearchQuery, context: ProviderContext): Promise<NormalizedThreadRecord[]> {
-    const queryText = buildOutlookSearchQuery(query);
-    const normalizedLabels = new Set((query.labels ?? []).map((label) => label.trim().toLowerCase()).filter(Boolean));
-    const postFilter = (thread: NormalizedThreadRecord) => threadMatchesStructuredFilters(thread, query);
-
-    if (!queryText && normalizedLabels.has("unread")) {
-      const threads = await fetchOutlookThreads(account, context, {
-        kind: "fetch-unread",
-        limit: query.limit,
-        fetchLimit: Math.min(Math.max(query.limit * 3, query.limit), 100),
-        postFilter,
-      });
-      return threads.slice(0, query.limit);
-    }
-
-    const threads = await fetchOutlookThreads(account, context, {
-      kind: queryText ? "search" : "browse-current-folder",
-      ...(queryText ? { queryText } : {}),
-      limit: query.limit,
-      fetchLimit: Math.min(Math.max(query.limit * 3, query.limit), 100),
-      postFilter,
-    });
-    return threads.slice(0, query.limit);
+    return searchOutlookWithSession(account, query, context);
   }
 
   async fetchUnread(
@@ -1573,10 +1720,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     query: FetchUnreadQuery,
     context: ProviderContext,
   ): Promise<NormalizedThreadRecord[]> {
-    return fetchOutlookThreads(account, context, {
-      kind: "fetch-unread",
-      limit: query.limit,
-    });
+    return fetchUnreadOutlookWithSession(account, query, context);
   }
 
   async refreshThread(
@@ -1584,23 +1728,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     threadRef: string,
     context: ProviderContext,
   ): Promise<void> {
-    const locatorRow = context.db.findProviderLocator("thread", threadRef);
-    if (!locatorRow) {
-      throw new SurfaceError("cache_miss", `No provider locator exists for thread '${threadRef}'.`, {
-        account: account.name,
-        threadRef,
-      });
-    }
-
-    const locator = parseOutlookThreadLocator(locatorRow.locator_json);
-    if (!locator.conversation_id) {
-      throw new SurfaceError("transport_error", `Thread '${threadRef}' is missing an Outlook conversation id.`, {
-        account: account.name,
-        threadRef,
-      });
-    }
-
-    await refreshOutlookConversation(account, locator.conversation_id, context);
+    await refreshOutlookThreadWithSession(account, threadRef, context);
   }
 
   async readMessage(
@@ -1609,43 +1737,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     refresh: boolean,
     context: ProviderContext,
   ): Promise<ReadResultEnvelope> {
-    const stored = context.db.getStoredMessage(messageRef);
-    if (!stored) {
-      throw new SurfaceError("not_found", `Message '${messageRef}' was not found.`, {
-        account: account.name,
-        messageRef,
-      });
-    }
-
-    const attachments = context.db.listAttachmentsForMessage(messageRef).map((attachment) => ({
-      attachment_id: attachment.attachment_id,
-      filename: attachment.filename,
-      mime_type: attachment.mime_type,
-      size_bytes: attachment.size_bytes,
-      inline: Boolean(attachment.inline),
-    }));
-
-    const hasReadableCache = Boolean(stored.body_cache_path && existsSync(stored.body_cache_path));
-    if (!refresh && hasReadableCache) {
-      return buildReadEnvelope(account, messageRef, stored.thread_ref, parseStoredMessage(stored), attachments, "hit");
-    }
-    const refreshed = await refreshStoredMessage(account, messageRef, context);
-
-    const refreshedAttachments = context.db.listAttachmentsForMessage(messageRef).map((attachment) => ({
-      attachment_id: attachment.attachment_id,
-      filename: attachment.filename,
-      mime_type: attachment.mime_type,
-      size_bytes: attachment.size_bytes,
-      inline: Boolean(attachment.inline),
-    }));
-    return buildReadEnvelope(
-      account,
-      messageRef,
-      refreshed.thread_ref,
-      parseStoredMessage(refreshed),
-      refreshedAttachments,
-      "refreshed",
-    );
+    return readOutlookMessageWithSession(account, messageRef, refresh, context);
   }
 
   async listAttachments(

@@ -21,3 +21,7 @@ export function makeMessageRef(): string {
 export function makeAttachmentId(): string {
   return buildRef("att");
 }
+
+export function makeSessionId(): string {
+  return buildRef("sess");
+}

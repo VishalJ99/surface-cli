@@ -56,6 +56,23 @@ export interface StoredSummaryRecord {
   fingerprint: string | null;
 }
 
+export interface StoredSessionRecord {
+  session_id: string;
+  account_id: string;
+  provider: string;
+  transport: string;
+  socket_path: string;
+  auth_token: string;
+  status: "starting" | "running" | "expired" | "closed" | "failed";
+  pid: number | null;
+  idle_timeout_seconds: number;
+  max_age_seconds: number;
+  error_detail: string | null;
+  created_at: string;
+  last_used_at: string;
+  closed_at: string | null;
+}
+
 export class SurfaceDatabase {
   readonly connection: InstanceType<typeof Database>;
 
@@ -162,6 +179,24 @@ export class SurfaceDatabase {
         fingerprint TEXT,
         generated_at TEXT NOT NULL,
         FOREIGN KEY(thread_ref) REFERENCES threads(thread_ref) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        transport TEXT NOT NULL,
+        socket_path TEXT NOT NULL,
+        auth_token TEXT NOT NULL,
+        status TEXT NOT NULL,
+        pid INTEGER,
+        idle_timeout_seconds INTEGER NOT NULL,
+        max_age_seconds INTEGER NOT NULL,
+        error_detail TEXT,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        closed_at TEXT,
+        FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
       );
     `);
 
@@ -767,6 +802,178 @@ export class SurfaceDatabase {
     }
 
     return row;
+  }
+
+  createSession(input: {
+    session_id: string;
+    account_id: string;
+    provider: string;
+    transport: string;
+    socket_path: string;
+    auth_token: string;
+    idle_timeout_seconds: number;
+    max_age_seconds: number;
+  }): StoredSessionRecord {
+    const timestamp = nowIsoUtc();
+    this.connection
+      .prepare(
+        `
+        INSERT INTO sessions (
+          session_id,
+          account_id,
+          provider,
+          transport,
+          socket_path,
+          auth_token,
+          status,
+          pid,
+          idle_timeout_seconds,
+          max_age_seconds,
+          error_detail,
+          created_at,
+          last_used_at,
+          closed_at
+        ) VALUES (
+          @session_id,
+          @account_id,
+          @provider,
+          @transport,
+          @socket_path,
+          @auth_token,
+          'starting',
+          NULL,
+          @idle_timeout_seconds,
+          @max_age_seconds,
+          NULL,
+          @created_at,
+          @last_used_at,
+          NULL
+        )
+        `,
+      )
+      .run({
+        ...input,
+        created_at: timestamp,
+        last_used_at: timestamp,
+      });
+    return this.getSession(input.session_id)!;
+  }
+
+  getSession(sessionId: string): StoredSessionRecord | undefined {
+    return this.connection
+      .prepare(
+        `
+        SELECT
+          session_id,
+          account_id,
+          provider,
+          transport,
+          socket_path,
+          auth_token,
+          status,
+          pid,
+          idle_timeout_seconds,
+          max_age_seconds,
+          error_detail,
+          created_at,
+          last_used_at,
+          closed_at
+        FROM sessions
+        WHERE session_id = ?
+        LIMIT 1
+        `,
+      )
+      .get(sessionId) as StoredSessionRecord | undefined;
+  }
+
+  listSessions(): StoredSessionRecord[] {
+    return this.connection
+      .prepare(
+        `
+        SELECT
+          session_id,
+          account_id,
+          provider,
+          transport,
+          socket_path,
+          auth_token,
+          status,
+          pid,
+          idle_timeout_seconds,
+          max_age_seconds,
+          error_detail,
+          created_at,
+          last_used_at,
+          closed_at
+        FROM sessions
+        ORDER BY created_at DESC
+        `,
+      )
+      .all() as StoredSessionRecord[];
+  }
+
+  markSessionRunning(sessionId: string, pid: number | null): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE sessions
+        SET status = 'running',
+            pid = ?,
+            error_detail = NULL,
+            closed_at = NULL
+        WHERE session_id = ?
+        `,
+      )
+      .run(pid, sessionId);
+  }
+
+  updateSessionProcessInfo(sessionId: string, pid: number | null): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE sessions
+        SET pid = ?
+        WHERE session_id = ?
+        `,
+      )
+      .run(pid, sessionId);
+  }
+
+  touchSession(sessionId: string): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE sessions
+        SET last_used_at = ?
+        WHERE session_id = ?
+        `,
+      )
+      .run(nowIsoUtc(), sessionId);
+  }
+
+  markSessionClosed(
+    sessionId: string,
+    status: StoredSessionRecord["status"],
+    options: { errorDetail?: string | null; pid?: number | null } = {},
+  ): void {
+    this.connection
+      .prepare(
+        `
+        UPDATE sessions
+        SET status = @status,
+            error_detail = @error_detail,
+            pid = @pid,
+            closed_at = @closed_at
+        WHERE session_id = @session_id
+        `,
+      )
+      .run({
+        session_id: sessionId,
+        status,
+        error_detail: options.errorDetail ?? null,
+        pid: options.pid ?? null,
+        closed_at: nowIsoUtc(),
+      });
   }
 
   findSummary(threadRef: string): ThreadSummary | null {

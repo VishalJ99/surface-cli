@@ -112,6 +112,13 @@ Each account/provider transport should expose capability flags such as:
 
 Capabilities are account/transport-level. Message applicability should be derived from message facts.
 
+## Warm Session Rules
+
+- transports may optionally support explicit warm session ids for repeated live operations
+- the default adapter behavior remains stateless when no session id is provided
+- v1 warm session support is intentionally transport-specific rather than universal
+- read-path warm sessions must remain bound to one account/provider/transport and fail closed on mismatch or expiry
+
 ## Write Action Rules
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists

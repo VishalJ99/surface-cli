@@ -53,3 +53,4 @@ Use zero-padded sequential numbers:
 - `0029-gmail-rsvp-uses-google-calendar-api.md`
 - `0030-thread-get-and-structured-search-filters.md`
 - `0031-reuse-thread-summaries-and-batch-openclaw-by-thread.md`
+- `0032-explicit-session-ids-for-warm-outlook-read-paths.md`

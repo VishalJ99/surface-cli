@@ -28,6 +28,7 @@ SQLite should store enough information to resolve refs and power later commands:
 - attachment metadata
 - summary metadata
 - summary fingerprint metadata for reuse
+- warm session metadata for daemon-backed provider operations
 - timestamps such as `first_seen_at`, `last_synced_at`, `last_read_at`
 
 ## Cache Behavior
@@ -37,6 +38,7 @@ SQLite should store enough information to resolve refs and power later commands:
 - `search`, `fetch-unread`, and `thread get --refresh` should persist normalized thread/message state before summary generation.
 - Summaries should live in SQLite with backend, model, brief, action flags, importance, fingerprint, and generation time.
 - When the canonical summary fingerprint is unchanged for the same backend/model, Surface should reuse the stored summary instead of regenerating it.
+- Warm session rows should persist session id, account binding, socket path, pid, status, expiry settings, and last-used timestamps.
 - `read <message_ref>` should check local state first.
 - On cache miss, truncation, or refresh, `read` should fetch live and update local state.
 
@@ -56,6 +58,8 @@ SQLite should store enough information to resolve refs and power later commands:
         <message_ref>/
           body.txt
           meta.json
+  sessions/
+    <session_id>.sock
   auth/
     <account_id>/
 ```
@@ -74,6 +78,7 @@ Use the directories this way:
   when the stable `attachment_id` is unchanged
 
 `downloads/` should not be treated as disposable cache.
+`sessions/` contains disposable local daemon sockets for warm provider sessions.
 
 ## Cache Clearing
 

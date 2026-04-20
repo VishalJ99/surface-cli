@@ -13,6 +13,18 @@ import { loadStoredThread, threadHasReadableCache } from "./lib/stored-mail.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { resolveProviderAdapter } from "./providers/index.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
+import {
+  DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
+  DEFAULT_SESSION_MAX_AGE_SECONDS,
+  listWarmSessions,
+  sessionFetchUnread,
+  sessionReadMessage,
+  sessionRefreshThread,
+  sessionSearch,
+  sessionStartEnvelope,
+  startWarmSession,
+  stopWarmSession,
+} from "./session.js";
 
 interface GlobalOptions {
   config?: string;
@@ -328,11 +340,91 @@ authCommand
     });
   });
 
+const sessionCommand = program.command("session").description("Manage warm provider sessions.");
+
+sessionCommand
+  .command("start")
+  .requiredOption("--account <account>", "Logical account name")
+  .addOption(
+    new Option("--idle-timeout <seconds>", "Idle timeout in seconds")
+      .argParser(positiveInt)
+      .default(DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS),
+  )
+  .addOption(
+    new Option("--max-age <seconds>", "Maximum session age in seconds")
+      .argParser(positiveInt)
+      .default(DEFAULT_SESSION_MAX_AGE_SECONDS),
+  )
+  .action(async (options, command: Command) => {
+    await runAccountAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      options.account,
+      async (context) => {
+        const session = await startWarmSession(context, context.account, {
+          idleTimeoutSeconds: options.idleTimeout,
+          maxAgeSeconds: options.maxAge,
+        });
+        writeJson(sessionStartEnvelope(session, context.account));
+      },
+    );
+  });
+
+sessionCommand.command("list").action(async (_options, command: Command) => {
+  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+    writeJson({
+      schema_version: "1",
+      command: "session-list",
+      generated_at: nowIsoUtc(),
+      sessions: listWarmSessions(context).map((session) => ({
+        session_id: session.session_id,
+        account: session.account_name,
+        provider: session.provider,
+        transport: session.transport,
+        status: session.status,
+        created_at: session.created_at,
+        last_used_at: session.last_used_at,
+        idle_timeout_seconds: session.idle_timeout_seconds,
+        max_age_seconds: session.max_age_seconds,
+        expires_at: session.expires_at,
+        ...(session.error_detail ? { error_detail: session.error_detail } : {}),
+      })),
+    });
+  });
+});
+
+sessionCommand
+  .command("stop")
+  .argument("<session_id>", "Warm session id")
+  .action(async (sessionId: string, _options, command: Command) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
+      const stopped = await stopWarmSession(context, sessionId);
+      const account = context.db.findAccountById(stopped.account_id);
+      writeJson({
+        schema_version: "1",
+        command: "session-stop",
+        generated_at: nowIsoUtc(),
+        session: {
+          session_id: stopped.session_id,
+          account: account?.name ?? null,
+          provider: stopped.provider,
+          transport: stopped.transport,
+          status: stopped.status,
+          created_at: stopped.created_at,
+          last_used_at: stopped.last_used_at,
+          idle_timeout_seconds: stopped.idle_timeout_seconds,
+          max_age_seconds: stopped.max_age_seconds,
+          closed_at: stopped.closed_at,
+        },
+      });
+    });
+  });
+
 const mailCommand = program.command("mail").description("Search, fetch, and read mail.");
 
 mailCommand
   .command("search")
   .requiredOption("--account <account>", "Logical account name")
+  .option("--session <session_id>", "Use a warm session id")
   .option("--text <query>", "Free-text search query")
   .option("--from <sender>", "Sender filter")
   .option("--subject <subject>", "Subject filter")
@@ -366,8 +458,9 @@ mailCommand
           );
         }
 
-        const adapter = resolveProviderAdapter(context.account);
-        const threads = await adapter.search(context.account, query, context);
+        const threads = options.session
+          ? await sessionSearch(context, options.session, query)
+          : await resolveProviderAdapter(context.account).search(context.account, query, context);
 
         writeJson({
           schema_version: "1",
@@ -384,31 +477,27 @@ mailCommand
 mailCommand
   .command("fetch-unread")
   .requiredOption("--account <account>", "Logical account name")
+  .option("--session <session_id>", "Use a warm session id")
   .addOption(new Option("--limit <limit>", "Max threads to return").argParser(positiveInt))
   .action(async (options, command: Command) => {
     await runAccountAction(
       command.optsWithGlobals<GlobalOptions>(),
       options.account,
       async (context) => {
-        const adapter = resolveProviderAdapter(context.account);
-        const threads = await adapter.fetchUnread(
-          context.account,
-          {
-            limit: options.limit ?? context.config.defaultResultLimit,
-            unread_only: true,
-          },
-          context,
-        );
+        const query = {
+          limit: options.limit ?? context.config.defaultResultLimit,
+          unread_only: true as const,
+        };
+        const threads = options.session
+          ? await sessionFetchUnread(context, options.session, query)
+          : await resolveProviderAdapter(context.account).fetchUnread(context.account, query, context);
 
         writeJson({
           schema_version: "1",
           command: "fetch-unread",
           generated_at: nowIsoUtc(),
           account: context.account.name,
-          query: {
-            limit: options.limit ?? context.config.defaultResultLimit,
-            unread_only: true,
-          },
+          query,
           threads: threads.map(toPublicThread),
         });
       },
@@ -420,6 +509,7 @@ mailCommand
   .description("Inspect thread state.")
   .command("get")
   .argument("<thread_ref>", "Stable thread ref")
+  .option("--session <session_id>", "Use a warm session id when a live refresh is needed")
   .option("--refresh", "Bypass local cache and fetch live", false)
   .action(async (threadRef: string, options, command: Command) => {
     await runThreadAction(
@@ -429,7 +519,11 @@ mailCommand
         const adapter = resolveProviderAdapter(context.account);
         let cacheStatus: "hit" | "refreshed" = "hit";
         if (Boolean(options.refresh) || !threadHasReadableCache(context.db, threadRef)) {
-          await adapter.refreshThread(context.account, threadRef, context);
+          if (options.session) {
+            await sessionRefreshThread(context, options.session, threadRef);
+          } else {
+            await adapter.refreshThread(context.account, threadRef, context);
+          }
           cacheStatus = "refreshed";
         }
 
@@ -458,6 +552,7 @@ mailCommand
 mailCommand
   .command("read")
   .argument("<message_ref>", "Stable message ref")
+  .option("--session <session_id>", "Use a warm session id")
   .option("--refresh", "Bypass local cache and fetch live", false)
   .option("--mark-read", "Mark the message as read after resolving the ref", false)
   .action(async (messageRef: string, options, command: Command) => {
@@ -466,10 +561,21 @@ mailCommand
       messageRef,
       async (context) => {
         const adapter = resolveProviderAdapter(context.account);
+        if (options.session && Boolean(options.markRead)) {
+          throw new SurfaceError(
+            "invalid_argument",
+            "--session is not supported together with --mark-read in v1.",
+            { account: context.account.name, messageRef },
+          );
+        }
         if (Boolean(options.markRead)) {
           await adapter.markRead(context.account, [messageRef], context);
         }
-        writeJson(await adapter.readMessage(context.account, messageRef, Boolean(options.refresh), context));
+        writeJson(
+          options.session
+            ? await sessionReadMessage(context, options.session, messageRef, Boolean(options.refresh))
+            : await adapter.readMessage(context.account, messageRef, Boolean(options.refresh), context),
+        );
       },
     );
   });

@@ -11,6 +11,7 @@ export interface SurfacePaths {
   authDir: string;
   cacheDir: string;
   downloadsDir: string;
+  sessionsDir: string;
 }
 
 export interface AccountPaths {
@@ -28,6 +29,7 @@ export function buildSurfacePaths(config: SurfaceConfig, configPath: string): Su
     authDir: join(config.cacheDir, "auth"),
     cacheDir: join(config.cacheDir, "cache"),
     downloadsDir: join(config.cacheDir, "downloads"),
+    sessionsDir: join(config.cacheDir, "sessions"),
   };
 }
 
@@ -36,6 +38,7 @@ export function ensureSurfacePaths(paths: SurfacePaths): void {
   mkdirSync(paths.authDir, { recursive: true });
   mkdirSync(paths.cacheDir, { recursive: true });
   mkdirSync(paths.downloadsDir, { recursive: true });
+  mkdirSync(paths.sessionsDir, { recursive: true });
 }
 
 export function buildAccountPaths(paths: SurfacePaths, account: MailAccount): AccountPaths {

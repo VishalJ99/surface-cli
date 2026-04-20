@@ -92,6 +92,7 @@ surface auth status personal_2
 ```bash
 surface mail fetch-unread --account uni --limit 10
 surface mail fetch-unread --account personal_2 --limit 20
+surface mail fetch-unread --account uni --session sess_01... --limit 10
 ```
 
 ### Search Mail
@@ -99,8 +100,17 @@ surface mail fetch-unread --account personal_2 --limit 20
 ```bash
 surface mail search --account uni --text "invoice" --limit 10
 surface mail search --account uni --from registrar@school.edu --subject "waitlist" --limit 10
+surface mail search --account uni --session sess_01... --from registrar@school.edu --limit 10
 surface mail search --account personal_2 --mailbox inbox --label unread --text "sale" --limit 10
 surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
+```
+
+### Warm Sessions
+
+```bash
+surface session start --account uni
+surface session list
+surface session stop sess_01...
 ```
 
 ### Read One Thread
@@ -108,6 +118,7 @@ surface mail search --account personal_2 --text "has:attachment newer_than:30d" 
 ```bash
 surface mail thread get thr_01...
 surface mail thread get thr_01... --refresh
+surface mail thread get thr_01... --refresh --session sess_01...
 ```
 
 ### Read One Message
@@ -115,6 +126,7 @@ surface mail thread get thr_01... --refresh
 ```bash
 surface mail read msg_01...
 surface mail read msg_01... --refresh
+surface mail read msg_01... --refresh --session sess_01...
 surface mail read msg_01... --mark-read
 ```
 
@@ -150,17 +162,20 @@ surface mail rsvp msg_01... --response accept
 1. Start with `surface account list` if the target account is unclear.
 2. Use `surface auth status` before assuming a provider is ready.
 3. For triage, prefer `fetch-unread` or `search` and inspect the returned thread/message refs.
-4. Use `surface mail thread get <thread_ref> --refresh` when you need the latest full state of one watched conversation.
-5. Read only the messages you need with `surface mail read <message_ref>`.
-6. Act using refs from Surface output. Do not rely on array positions from previous JSON.
+4. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
+5. Use `surface mail thread get <thread_ref> --refresh` when you need the latest full state of one watched conversation.
+6. Read only the messages you need with `surface mail read <message_ref>`.
+7. Act using refs from Surface output. Do not rely on array positions from previous JSON.
 
 ## Important Rules
 
 - Surface outputs JSON on stdout. Parse it instead of scraping terminal text.
 - Use `message_ref` and `thread_ref` for follow-up commands.
 - `search` accepts structured filters for sender, subject, mailbox, and labels in addition to raw `--text`.
+- `session start` is the explicit opt-in path for warm Outlook read sessions. In v1, `--session` is supported on `search`, `fetch-unread`, `thread get --refresh`, and `read`.
 - `thread get --refresh` is the thread-level live refresh path for automations that watch a specific conversation.
 - `read` is cache-first by default. Use `--refresh` when you need live provider state.
+- the first session-backed Outlook query still pays mailbox setup cost; the main win is faster follow-on live reads in the same mailbox session
 - `read` does not download attachments. Use `surface attachment download`.
 - `fetch-unread` and `search` do not mutate mailbox state.
 - `--draft` is the safe compose path when you do not need to send immediately.
@@ -185,10 +200,12 @@ surface mail rsvp msg_01... --response accept
 ```bash
 surface account list
 surface auth status
+surface session start --account uni
 surface mail fetch-unread --account uni --limit 10
+surface mail fetch-unread --account uni --session sess_01... --limit 10
 surface mail search --account personal_2 --from alerts@example.com --subject 'discount' --mailbox inbox --label unread --limit 5
-surface mail thread get thr_01... --refresh
-surface mail read msg_01...
+surface mail thread get thr_01... --refresh --session sess_01...
+surface mail read msg_01... --refresh --session sess_01...
 surface mail read msg_01... --mark-read
 surface attachment list msg_01...
 surface attachment download msg_01... att_01...

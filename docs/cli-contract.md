@@ -8,6 +8,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 
 - `surface account`
 - `surface auth`
+- `surface session`
 - `surface mail`
 - `surface attachment`
 - `surface cache`
@@ -70,12 +71,47 @@ Example remote auth login result:
 }
 ```
 
+### Sessions
+
+- `surface session start --account <account> [--idle-timeout <seconds>] [--max-age <seconds>]`
+- `surface session list`
+- `surface session stop <session_id>`
+
+Warm session notes:
+
+- session ids are explicit and opt-in
+- v1 warm sessions are supported only for `outlook-web-playwright`
+- v1 session-aware commands are `search`, `fetch-unread`, `thread get --refresh`, and `read`
+- `read --mark-read` stays on the stateless path in v1
+
+Example session start result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "session-start",
+  "generated_at": "2026-04-20T16:53:07Z",
+  "session": {
+    "session_id": "sess_01KPNWYN4FX456JA88JBWHYDX0",
+    "account": "uni",
+    "provider": "outlook",
+    "transport": "outlook-web-playwright",
+    "status": "running",
+    "created_at": "2026-04-20T16:53:04Z",
+    "last_used_at": "2026-04-20T16:53:04Z",
+    "idle_timeout_seconds": 3600,
+    "max_age_seconds": 604800,
+    "expires_at": "2026-04-20T17:53:04.000Z"
+  }
+}
+```
+
 ### Mail
 
-- `surface mail search --account <account> [--text <query>] [--from <sender>] [--subject <subject>] [--mailbox <mailbox>] [--label <label>]...`
-- `surface mail fetch-unread ...`
-- `surface mail thread get <thread_ref> [--refresh]`
-- `surface mail read <message_ref> [--mark-read]`
+- `surface mail search --account <account> [--session <session_id>] [--text <query>] [--from <sender>] [--subject <subject>] [--mailbox <mailbox>] [--label <label>]...`
+- `surface mail fetch-unread --account <account> [--session <session_id>] ...`
+- `surface mail thread get <thread_ref> [--refresh] [--session <session_id>]`
+- `surface mail read <message_ref> [--refresh] [--session <session_id>] [--mark-read]`
 - `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--draft]`
 - `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
 - `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
@@ -117,12 +153,14 @@ Recommended v1 format:
 - `thread_ref = "thr_<ulid>"`
 - `message_ref = "msg_<ulid>"`
 - `attachment_id = "att_<ulid>"`
+- `session_id = "sess_<ulid>"`
 
 Examples:
 
 - `thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2`
 - `msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P`
 - `att_01JQ6YJ3G4M7YJ6M2Y1P3A8S4T`
+- `sess_01KPNWYN4FX456JA88JBWHYDX0`
 
 These refs are:
 

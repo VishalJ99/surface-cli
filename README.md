@@ -12,6 +12,7 @@ Top-level groups:
 
 - `surface account`
 - `surface auth`
+- `surface session`
 - `surface mail`
 - `surface attachment`
 - `surface cache`
@@ -26,11 +27,17 @@ surface auth login work
 surface auth status
 surface auth logout school
 
+surface session start --account school
+surface session list
+surface session stop sess_01...
+
 surface mail fetch-unread --account work --limit 25
+surface mail fetch-unread --account school --session sess_01... --limit 25
 surface mail search --account work --text invoice --subject overdue --limit 10
+surface mail search --account school --session sess_01... --from billing@vendor.com --limit 10
 surface mail search --account work --from billing@vendor.com --mailbox inbox --label unread --limit 10
-surface mail thread get thr_01...
-surface mail read msg_01...
+surface mail thread get thr_01... --refresh --session sess_01...
+surface mail read msg_01... --refresh --session sess_01...
 surface mail send --account school --to me@example.com --subject "hello" --body "test"
 surface mail send --account school --to me@example.com --subject "hello" --body "test" --draft
 surface mail reply msg_01... --body "Thanks"
@@ -78,6 +85,7 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - live Gmail `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
 - live Outlook `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
+- explicit warm session ids for Outlook read-path chaining (`session start/list/stop`, plus `--session` on `search`, `fetch-unread`, `thread get --refresh`, and `read`)
 - summary backends for `openrouter` and `openclaw`
 - lean opt-in Outlook v1 and Gmail v1 live e2e coverage via `npm run e2e:outlook-v1` and `npm run e2e:gmail-v1`
 
