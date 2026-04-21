@@ -64,7 +64,7 @@ function defaultConfigTemplate(): string {
     "provider_timeout_ms = 30000",
     "summary_input_max_bytes = 16384",
     "summarizer_backend = \"none\"",
-    "summarizer_model = \"openai/gpt-4o-mini\"",
+    "summarizer_model = \"openai/gpt-5.4-mini\"",
     "summarizer_timeout_ms = 20000",
     "writes_enabled = false",
     "send_mode = \"draft_only\"",
@@ -171,7 +171,7 @@ export function loadConfig(options: ConfigLoadOptions = {}): {
       process.env.SURFACE_SUMMARIZER_MODEL ??
       fileConfig.summarizer?.model ??
       fileConfig.summarizer_model ??
-      "openai/gpt-4o-mini",
+      "openai/gpt-5.4-mini",
     summaryInputMaxBytes:
       envInt("SURFACE_SUMMARY_INPUT_MAX_BYTES") ??
       fileConfig.summary_input_max_bytes ??

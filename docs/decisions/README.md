@@ -56,3 +56,4 @@ Use zero-padded sequential numbers:
 - `0032-explicit-session-ids-for-warm-outlook-read-paths.md`
 - `0033-account-owner-identity-for-me-scoped-summaries.md`
 - `0034-default-account-transport-from-provider.md`
+- `0035-use-gpt-5-4-mini-as-default-openrouter-summarizer.md`

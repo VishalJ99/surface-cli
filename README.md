@@ -90,7 +90,8 @@ The repo now contains a working TypeScript scaffold under `src/`:
 - Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
 - live Outlook `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
 - explicit warm session ids for Outlook read-path chaining (`session start/list/stop`, plus `--session` on `search`, `fetch-unread`, `thread get --refresh`, and `read`)
-- summary backends for `openrouter` and `openclaw`
+- summary backends for `openrouter` and `openclaw`, with `openai/gpt-5.4-mini` as the default
+  OpenRouter summarizer model when summarization is enabled
 - lean opt-in Outlook v1 and Gmail v1 live e2e coverage via `npm run e2e:outlook-v1` and `npm run e2e:gmail-v1`
 
 What is still intentionally incomplete:
@@ -121,6 +122,9 @@ The correct split is:
 - `~/.surface-cli/config.toml` is auto-created on first run and stores local policy only
   such as summarizer and write-safety settings
 - account registry and auth state do not live in `config.toml`
+- existing config files are not rewritten on upgrade; if an older config names
+  `summarizer_model = "openai/gpt-4o-mini"`, change it to
+  `summarizer_model = "openai/gpt-5.4-mini"` for the current recommended default
 
 ### Install Surface
 
@@ -318,8 +322,8 @@ clawhub login
 clawhub publish ./skills/surface-cli \
   --slug surface-cli \
   --name "Surface CLI" \
-  --version 0.1.0 \
-  --changelog "Initial Surface CLI skill release"
+  --version <version> \
+  --changelog "<release notes>"
 ```
 
 Before publishing, verify the package payload:

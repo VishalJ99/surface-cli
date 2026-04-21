@@ -297,7 +297,7 @@ Recommended example:
       },
       "summary": {
         "backend": "openrouter",
-        "model": "openai/gpt-4o-mini",
+        "model": "openai/gpt-5.4-mini",
         "brief": "Vendor invoice reminder requiring payment review.",
         "needs_action": true,
         "importance": "high"
@@ -411,7 +411,7 @@ Recommended example:
     },
     "summary": {
       "backend": "openrouter",
-      "model": "openai/gpt-4o-mini",
+      "model": "openai/gpt-5.4-mini",
       "brief": "Vendor invoice reminder requiring payment review.",
       "needs_action": true,
       "importance": "high"

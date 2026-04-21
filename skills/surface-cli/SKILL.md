@@ -80,10 +80,22 @@ Local policy lives in:
 
 Important local knobs:
 
+- `summarizer_backend`
+- `summarizer_model`
 - `writes_enabled`
 - `send_mode`
 - `test_recipients`
 - `test_account_allowlist`
+
+Recommended summarization setup:
+
+```toml
+summarizer_backend = "openrouter"
+summarizer_model = "openai/gpt-5.4-mini"
+```
+
+If an older install already has `summarizer_model = "openai/gpt-4o-mini"` in
+`~/.surface-cli/config.toml`, update it to `openai/gpt-5.4-mini` before judging summary quality.
 
 ## Common Operations
 
@@ -120,6 +132,21 @@ surface session start --account uni
 surface session list
 surface session stop sess_01...
 ```
+
+### Parallel Read Guidance
+
+Read-only commands may be run in parallel. Live probes passed for:
+
+- two Gmail searches on the same account
+- two cold Outlook searches on the same account
+- Gmail and Outlook searches at the same time
+- two separate Outlook warm sessions searched at the same time
+- two searches sharing one Outlook warm session
+
+For Outlook, keep concurrency modest because each cold command or warm session uses browser
+resources. If planning multiple concurrent Outlook operations, prefer one warm session per
+parallel worker. Reusing the same `--session` concurrently works in the tested case but can be
+slower due to contention.
 
 ### Read One Thread
 

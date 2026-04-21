@@ -51,7 +51,9 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
   Default: `none`
 - `summarizer_model`
   Default model used for summarization when a backend supports model selection.
-  Default: `openai/gpt-4o-mini`
+  Default: `openai/gpt-5.4-mini`
+  Existing config files are not rewritten automatically; update this value manually if an older
+  `~/.surface-cli/config.toml` still names `openai/gpt-4o-mini`.
 - `summary_input_max_bytes`
   Maximum bytes of normalized body content sent into summarization.
   This cap applies to the canonical summary payload, so default summaries are optimized
