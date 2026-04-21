@@ -51,6 +51,9 @@ preferences only, not account registry or auth state.
   Default: `openai/gpt-4o-mini`
 - `summary_input_max_bytes`
   Maximum bytes of normalized body content sent into summarization.
+  This cap applies to the canonical summary payload, so default summaries are optimized
+  for inbox triage and may omit older body details in very long threads. Increase this
+  value or use a future deep-summary mode when exhaustive long-thread summaries matter.
   Default: `16384`
 - `summarizer_timeout_ms`
   Timeout budget for summarization requests.

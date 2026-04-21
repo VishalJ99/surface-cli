@@ -22,6 +22,9 @@ that payload has not changed.
 Specifically:
 
 - build a canonical summary input from normalized thread data
+- cap the cumulative message body text included in that canonical summary input with
+  `summary_input_max_bytes`; message metadata, snippets, invite data, and attachments
+  still contribute to the payload
 - compute and persist a fingerprint of that canonical payload alongside the summary row
 - reuse a stored summary when `backend`, `model`, and `fingerprint` all match
 - for OpenClaw, batch whole-thread payloads into bounded chunks instead of invoking one
@@ -47,6 +50,10 @@ across multiple summary requests.
 - the batch defaults are tuned for the current OpenClaw wrapper behavior, not just the raw
   model context size, so future backend changes may justify retuning them
 - summary rows in SQLite now include a fingerprint field
+- default summaries are triage-oriented summaries over the clipped canonical payload,
+  not guaranteed exhaustive deep summaries of every historical body in very long threads
+- changes outside the clipped canonical payload may not affect the summary fingerprint;
+  a future deep-summary mode should use a larger cap or hierarchical summarization
 - OpenClaw summaries must explicitly guard against cross-thread contamination because a
   single prompt can contain multiple threads
 - summarization remains optional: backend failures still degrade to `summary: null`

@@ -38,6 +38,7 @@ SQLite should store enough information to resolve refs and power later commands:
 - `search`, `fetch-unread`, and `thread get --refresh` should persist normalized thread/message state before summary generation.
 - Summaries should live in SQLite with backend, model, brief, action flags, importance, fingerprint, and generation time.
 - When the canonical summary fingerprint is unchanged for the same backend/model, Surface should reuse the stored summary instead of regenerating it.
+- Summary fingerprints are computed over the canonical summary payload, including the configured `summary_input_max_bytes` clipping policy, not over the entire cached thread body corpus.
 - Warm session rows should persist session id, account binding, socket path, pid, status, expiry settings, and last-used timestamps.
 - `read <message_ref>` should check local state first.
 - On cache miss, truncation, or refresh, `read` should fetch live and update local state.
