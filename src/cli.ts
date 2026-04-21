@@ -4,7 +4,7 @@ import { Command, Option } from "commander";
 import { statSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { accountIdentityInputSchema, accountInputSchema } from "./contracts/account.js";
+import { accountIdentityInputSchema, accountInputSchema, providerSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
@@ -48,6 +48,21 @@ function normalizeOptionalString(value: unknown): string | undefined {
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveAccountAddTransport(providerValue: unknown, transportValue: unknown): string {
+  const explicitTransport = normalizeOptionalString(transportValue);
+  if (explicitTransport) {
+    return explicitTransport;
+  }
+
+  const provider = providerSchema.parse(providerValue);
+  switch (provider) {
+    case "gmail":
+      return "gmail-api";
+    case "outlook":
+      return "outlook-web-playwright";
+  }
 }
 
 function directorySizeBytes(rootPath: string): number {
@@ -204,14 +219,14 @@ accountCommand
   .command("add")
   .argument("<name>", "Logical account name, for example work or personal")
   .requiredOption("--provider <provider>", "Provider family, for example gmail or outlook")
-  .requiredOption("--transport <transport>", "Transport name, for example gmail-api")
+  .option("--transport <transport>", "Transport name, defaults from provider")
   .requiredOption("--email <email>", "Primary mailbox email address")
   .action(async (name: string, options, command: Command) => {
     await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
       const parsed = accountInputSchema.parse({
         name,
         provider: options.provider,
-        transport: options.transport,
+        transport: resolveAccountAddTransport(options.provider, options.transport),
         email: options.email,
       });
       const account = context.db.upsertAccount(parsed);

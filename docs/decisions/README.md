@@ -55,3 +55,4 @@ Use zero-padded sequential numbers:
 - `0031-reuse-thread-summaries-and-batch-openclaw-by-thread.md`
 - `0032-explicit-session-ids-for-warm-outlook-read-paths.md`
 - `0033-account-owner-identity-for-me-scoped-summaries.md`
+- `0034-default-account-transport-from-provider.md`

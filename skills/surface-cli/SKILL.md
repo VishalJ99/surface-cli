@@ -53,8 +53,8 @@ surface auth status
 Add an account:
 
 ```bash
-surface account add personal_2 --provider gmail --transport gmail-api --email you@example.com
-surface account add uni --provider outlook --transport outlook-web-playwright --email you@example.com
+surface account add personal_2 --provider gmail --email you@example.com
+surface account add uni --provider outlook --email you@example.com
 ```
 
 For reliable `summary.needs_action`, Surface should know who the account owner is. Gmail auth can

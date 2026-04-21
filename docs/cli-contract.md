@@ -17,7 +17,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 
 ### Accounts And Auth
 
-- `surface account add <name> --provider <provider> --transport <transport> --email <email>`
+- `surface account add <name> --provider <provider> [--transport <transport>] --email <email>`
 - `surface account list`
 - `surface account identity show <account>`
 - `surface account identity set <account> [--email <email>] [--name <name>] [--email-alias <email>]... [--name-alias <name>]... [--clear-email-aliases] [--clear-name-aliases]`
@@ -28,6 +28,8 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 
 Account identity notes:
 
+- `account add` defaults `--transport` from `--provider` in v1:
+  `gmail -> gmail-api`, `outlook -> outlook-web-playwright`
 - `account add --email` seeds the account-owner identity with source `configured`
 - Gmail `auth login` and `auth status` upgrade the primary email to `provider_verified` when the
   authenticated Gmail profile exposes an address

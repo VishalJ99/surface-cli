@@ -20,8 +20,8 @@ Top-level groups:
 Current command surface:
 
 ```bash
-surface account add work --provider gmail --transport gmail-api --email me@company.com
-surface account add school --provider outlook --transport outlook-web-playwright --email me@school.edu
+surface account add work --provider gmail --email me@company.com
+surface account add school --provider outlook --email me@school.edu
 surface account identity set school --name "Your Name" --name-alias "FirstName"
 surface account identity show school
 
@@ -159,7 +159,7 @@ Gmail:
 - place a Google desktop OAuth client secret at `./client_secret.json` or set
   `SURFACE_GMAIL_CLIENT_SECRET_FILE`
 - add the account first:
-  - `surface account add personal --provider gmail --transport gmail-api --email you@example.com`
+  - `surface account add personal --provider gmail --email you@example.com`
 - run:
   - `surface auth login personal`
 - Gmail auth verifies the mailbox email and updates account-owner identity automatically.
