@@ -87,15 +87,11 @@ Important local knobs:
 - `test_recipients`
 - `test_account_allowlist`
 
-Recommended summarization setup:
-
-```toml
-summarizer_backend = "openrouter"
-summarizer_model = "openai/gpt-5.4-mini"
-```
-
-If an older install already has `summarizer_model = "openai/gpt-4o-mini"` in
-`~/.surface-cli/config.toml`, update it to `openai/gpt-5.4-mini` before judging summary quality.
+Summarization is opt-in and controlled by the user's local config. Do not change
+`summarizer_backend`, `summarizer_model`, or related environment variables unless the user
+explicitly asks. If an external summarizer backend is enabled, email thread content may be sent to
+the configured model provider; confirm the user accepts that privacy tradeoff before enabling or
+changing summarization.
 
 ## Common Operations
 
