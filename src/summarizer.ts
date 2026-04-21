@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 
+import type { AccountIdentity } from "./contracts/account.js";
 import type { ThreadSummary, NormalizedThreadRecord } from "./contracts/mail.js";
 import type { SurfaceConfig } from "./config.js";
 import type { SurfaceDatabase } from "./state/database.js";
@@ -11,6 +12,7 @@ const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const OPENCLAW_BATCH_MAX_THREADS = 3;
 const OPENCLAW_BATCH_MAX_INPUT_BYTES = 64 * 1024;
 const OPENCLAW_SUMMARY_THINKING = "low";
+const SUMMARY_PROMPT_VERSION = "2026-04-21-me-scoped-v1";
 
 interface SummaryShape {
   brief: string;
@@ -18,7 +20,18 @@ interface SummaryShape {
   importance: "low" | "medium" | "high";
 }
 
+interface SummaryAccountOwner {
+  primary_email: string;
+  display_name: string | null;
+  email_aliases: string[];
+  name_aliases: string[];
+  primary_email_source: AccountIdentity["primary_email_source"];
+  display_name_source: AccountIdentity["display_name_source"];
+}
+
 interface SummaryThreadPayload {
+  summary_prompt_version: string;
+  account_owner: SummaryAccountOwner;
   thread_ref: string;
   source: NormalizedThreadRecord["source"];
   subject: string;
@@ -65,7 +78,22 @@ function clipUtf8(input: string, maxBytes: number): string {
   return clipped;
 }
 
-function buildThreadPayload(thread: NormalizedThreadRecord, maxBytes: number): SummaryThreadPayload {
+function buildSummaryAccountOwner(identity: AccountIdentity): SummaryAccountOwner {
+  return {
+    primary_email: identity.primary_email,
+    display_name: identity.display_name,
+    email_aliases: identity.email_aliases,
+    name_aliases: identity.name_aliases,
+    primary_email_source: identity.primary_email_source,
+    display_name_source: identity.display_name_source,
+  };
+}
+
+function buildThreadPayload(
+  thread: NormalizedThreadRecord,
+  maxBytes: number,
+  accountOwner: SummaryAccountOwner,
+): SummaryThreadPayload {
   let remainingBytes = maxBytes;
   const messages: SummaryThreadPayload["messages"] = [];
 
@@ -96,6 +124,8 @@ function buildThreadPayload(thread: NormalizedThreadRecord, maxBytes: number): S
   }
 
   return {
+    summary_prompt_version: SUMMARY_PROMPT_VERSION,
+    account_owner: accountOwner,
     thread_ref: thread.thread_ref,
     source: thread.source,
     subject: thread.envelope.subject,
@@ -111,8 +141,13 @@ function buildSinglePrompt(payload: SummaryThreadPayload): string {
         "Summarize this email thread for an automation agent.",
         "Return JSON only.",
         "Use exactly this shape: {\"brief\": string, \"needs_action\": boolean, \"importance\": \"low\" | \"medium\" | \"high\"}.",
-        "Keep brief to one or two sentences.",
-        "Base the summary on the latest state of the thread, not stale quoted history.",
+        "The account_owner object defines ME for this account. Judge needs_action only from ME's perspective.",
+        "Set needs_action=true only if the latest state indicates ME must reply, decide, RSVP, send information, pay, approve, complete a task, or otherwise act now.",
+        "Set needs_action=false if ME already replied and the next move is with someone else, if the thread is informational, or if the action is merely optional or marketing.",
+        "Use account_owner primary_email and email_aliases for envelope matching; use display_name and name_aliases for body-text references to ME. Do not guess that a person is ME if the identity does not match.",
+        "For threads with more than one message, include the causal chain: what changed over the thread, who did what, and what the latest state implies.",
+        "Keep brief to one sentence for one-message threads and two to four sentences for multi-message threads.",
+        "Messages are provided latest-first. Reconstruct the causal chain from older messages to newest, but base action status on the latest state.",
         "Do not infer named programs, teams, organizations, or context that are not explicitly present in the thread.",
         "When details are ambiguous, prefer generic wording over guessed specifics.",
       ],
@@ -132,8 +167,13 @@ function buildBatchPrompt(batch: PreparedSummaryThread[]): string {
         "Use exactly this shape: {\"summaries\": [{\"thread_ref\": string, \"brief\": string, \"needs_action\": boolean, \"importance\": \"low\" | \"medium\" | \"high\"}]}",
         "Return exactly one summary object per input thread.",
         "Do not omit threads, add extra threads, or merge two threads into one summary.",
-        "Keep each brief to one or two sentences.",
-        "Base each summary on the latest state of that thread, not stale quoted history.",
+        "Each thread includes the same account_owner object defining ME for this account. Judge needs_action only from ME's perspective.",
+        "Set needs_action=true only if the latest state indicates ME must reply, decide, RSVP, send information, pay, approve, complete a task, or otherwise act now.",
+        "Set needs_action=false if ME already replied and the next move is with someone else, if the thread is informational, or if the action is merely optional or marketing.",
+        "Use account_owner primary_email and email_aliases for envelope matching; use display_name and name_aliases for body-text references to ME. Do not guess that a person is ME if the identity does not match.",
+        "For threads with more than one message, include the causal chain: what changed over the thread, who did what, and what the latest state implies.",
+        "Keep each brief to one sentence for one-message threads and two to four sentences for multi-message threads.",
+        "Messages are provided latest-first. Reconstruct the causal chain from older messages to newest, but base action status on the latest state.",
         "Summarize each thread independently. Never carry named programs, teams, organizations, or context from one thread into another.",
         "Do not infer named programs, teams, organizations, or context that are not explicitly present in that thread.",
         "When details are ambiguous, prefer generic wording over guessed specifics.",
@@ -149,8 +189,12 @@ function makeFingerprint(payload: SummaryThreadPayload): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
-function prepareThread(thread: NormalizedThreadRecord, config: SurfaceConfig): PreparedSummaryThread {
-  const payload = buildThreadPayload(thread, config.summaryInputMaxBytes);
+function prepareThread(
+  thread: NormalizedThreadRecord,
+  config: SurfaceConfig,
+  accountOwner: SummaryAccountOwner,
+): PreparedSummaryThread {
+  const payload = buildThreadPayload(thread, config.summaryInputMaxBytes, accountOwner);
   return {
     thread,
     payload,
@@ -426,13 +470,15 @@ export async function summarizeAndPersistThreads(
   threads: NormalizedThreadRecord[],
   config: SurfaceConfig,
   db: SurfaceDatabase,
+  accountIdentity: AccountIdentity,
 ): Promise<NormalizedThreadRecord[]> {
   if (config.summarizerBackend === "none") {
     return threads;
   }
 
   const target = await resolveSummaryTarget(config);
-  const preparedThreads = threads.map((thread) => prepareThread(thread, config));
+  const accountOwner = buildSummaryAccountOwner(accountIdentity);
+  const preparedThreads = threads.map((thread) => prepareThread(thread, config, accountOwner));
   const summaries = new Map<string, ThreadSummary | null>();
   const pending: PreparedSummaryThread[] = [];
 

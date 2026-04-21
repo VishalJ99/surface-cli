@@ -91,6 +91,11 @@ Provider-specific payloads must be mapped into:
 Providers should persist normalized thread/message state before summary generation so summary
 reuse can be keyed from the stored canonical thread content rather than provider-native payloads.
 
+Providers should also keep account-owner identity current when they can verify it during auth.
+Gmail can update the primary identity from the authenticated Gmail profile. Outlook v1 currently
+only verifies that a browser profile reaches the mailbox UI, so user-confirmed identity may be
+required until a reliable Outlook mailbox identity extraction path exists.
+
 Public JSON must not leak transport-specific field names unless explicitly documented.
 
 ## Capability Model
@@ -151,6 +156,8 @@ Each provider should pass the same contract tests for:
 - machine-readable error codes
 - summary reuse must not change the public result shape; unchanged threads may reuse stored
   summaries when the canonical content is unchanged
+- summary fingerprints include prompt version and account-owner identity semantics so ME-scoped
+  `needs_action` changes invalidate older generic summaries
 
 ## Provider Locator Requirements
 

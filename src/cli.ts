@@ -4,7 +4,7 @@ import { Command, Option } from "commander";
 import { statSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { accountInputSchema } from "./contracts/account.js";
+import { accountIdentityInputSchema, accountInputSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
@@ -232,6 +232,66 @@ accountCommand.command("list").action(async (_options, command: Command) => {
     });
   });
 });
+
+const accountIdentityCommand = accountCommand.command("identity").description("Manage account-owner identity used by summaries.");
+
+accountIdentityCommand
+  .command("show")
+  .argument("<account>", "Logical account name")
+  .action(async (accountName: string, _options, command: Command) => {
+    await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
+      writeJson({
+        schema_version: "1",
+        command: "account-identity-show",
+        account: context.account.name,
+        identity: context.db.getAccountIdentity(context.account),
+      });
+    });
+  });
+
+accountIdentityCommand
+  .command("set")
+  .argument("<account>", "Logical account name")
+  .option("--email <email>", "Primary mailbox email for this account owner")
+  .option("--name <name>", "Display name for this account owner")
+  .option("--email-alias <email>", "Additional email alias for this account owner", collectStringOption, [])
+  .option("--name-alias <name>", "Additional name or handle for this account owner", collectStringOption, [])
+  .option("--clear-email-aliases", "Replace existing email aliases instead of appending", false)
+  .option("--clear-name-aliases", "Replace existing name aliases instead of appending", false)
+  .action(async (accountName: string, options, command: Command) => {
+    await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
+      const input = accountIdentityInputSchema.parse({
+        primary_email: normalizeOptionalString(options.email),
+        display_name: normalizeOptionalString(options.name),
+        email_aliases: options.emailAlias ?? [],
+        name_aliases: options.nameAlias ?? [],
+        clear_email_aliases: Boolean(options.clearEmailAliases),
+        clear_name_aliases: Boolean(options.clearNameAliases),
+      });
+
+      if (
+        !input.primary_email
+        && !input.display_name
+        && (input.email_aliases ?? []).length === 0
+        && (input.name_aliases ?? []).length === 0
+        && !input.clear_email_aliases
+        && !input.clear_name_aliases
+      ) {
+        throw new SurfaceError(
+          "invalid_argument",
+          "Provide at least one of --email, --name, --email-alias, --name-alias, --clear-email-aliases, or --clear-name-aliases.",
+          { account: context.account.name },
+        );
+      }
+
+      writeJson({
+        schema_version: "1",
+        command: "account-identity-set",
+        account: context.account.name,
+        identity: context.db.updateAccountIdentityFromUser(context.account, input),
+      });
+    });
+  });
 
 accountCommand
   .command("remove")

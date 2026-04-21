@@ -459,11 +459,13 @@ export async function ensureGmailAccessToken(
 export async function gmailAuthStatus(account: MailAccount, context: ProviderContext): Promise<{
   authenticated: boolean;
   detail: string;
+  authenticatedEmail: string | null;
 }> {
   if (!existsSync(gmailTokenPath(context))) {
     return {
       authenticated: false,
       detail: "No Gmail token file found for this account.",
+      authenticatedEmail: null,
     };
   }
 
@@ -473,12 +475,14 @@ export async function gmailAuthStatus(account: MailAccount, context: ProviderCon
     return {
       authenticated: true,
       detail: email ? `Authenticated as ${email}.` : "Refresh token is valid.",
+      authenticatedEmail: email,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
       authenticated: false,
       detail: message,
+      authenticatedEmail: null,
     };
   }
 }

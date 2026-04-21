@@ -54,3 +54,4 @@ Use zero-padded sequential numbers:
 - `0030-thread-get-and-structured-search-filters.md`
 - `0031-reuse-thread-summaries-and-batch-openclaw-by-thread.md`
 - `0032-explicit-session-ids-for-warm-outlook-read-paths.md`
+- `0033-account-owner-identity-for-me-scoped-summaries.md`

@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-import type { MailAccount } from "../contracts/account.js";
+import type { AccountIdentity, AccountIdentitySource, MailAccount } from "../contracts/account.js";
 import type { MessageInvite, ThreadParticipant, ThreadSummary } from "../contracts/mail.js";
 import { makeAccountId } from "../refs.js";
 import { nowIsoUtc } from "../lib/time.js";
@@ -56,6 +56,18 @@ export interface StoredSummaryRecord {
   fingerprint: string | null;
 }
 
+interface StoredAccountIdentityRecord {
+  account_id: string;
+  primary_email: string;
+  display_name: string | null;
+  email_aliases_json: string;
+  name_aliases_json: string;
+  primary_email_source: AccountIdentitySource;
+  display_name_source: AccountIdentitySource | null;
+  verified_at: string | null;
+  updated_at: string;
+}
+
 export interface StoredSessionRecord {
   session_id: string;
   account_id: string;
@@ -97,6 +109,19 @@ export class SurfaceDatabase {
         email TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS account_identities (
+        account_id TEXT PRIMARY KEY,
+        primary_email TEXT NOT NULL,
+        display_name TEXT,
+        email_aliases_json TEXT NOT NULL DEFAULT '[]',
+        name_aliases_json TEXT NOT NULL DEFAULT '[]',
+        primary_email_source TEXT NOT NULL DEFAULT 'configured',
+        display_name_source TEXT,
+        verified_at TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS threads (
@@ -204,6 +229,7 @@ export class SurfaceDatabase {
     this.ensureColumn("messages", "invite_json", "TEXT");
     this.ensureColumn("summaries", "fingerprint", "TEXT");
     this.ensureProviderLocatorSchema();
+    this.seedMissingAccountIdentities();
   }
 
   private tableColumns(tableName: string): string[] {
@@ -263,6 +289,171 @@ export class SurfaceDatabase {
     this.connection.exec("DROP TABLE IF EXISTS provider_locators_legacy;");
   }
 
+  private parseStringArray(rawValue: string): string[] {
+    try {
+      const parsed = JSON.parse(rawValue) as unknown;
+      return Array.isArray(parsed)
+        ? parsed.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private normalizeEmailList(values: string[]): string[] {
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const value of values) {
+      const candidate = value.trim().toLowerCase();
+      if (!candidate || seen.has(candidate)) {
+        continue;
+      }
+      seen.add(candidate);
+      normalized.push(candidate);
+    }
+    return normalized;
+  }
+
+  private isPlaceholderEmail(value: string): boolean {
+    return value.trim().toLowerCase().endsWith("@placeholder.local");
+  }
+
+  private normalizeNameList(values: string[]): string[] {
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const value of values) {
+      const candidate = value.trim().replace(/\s+/g, " ");
+      const key = candidate.toLowerCase();
+      if (!candidate || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      normalized.push(candidate);
+    }
+    return normalized;
+  }
+
+  private rowToAccountIdentity(row: StoredAccountIdentityRecord): AccountIdentity {
+    return {
+      account_id: row.account_id,
+      primary_email: row.primary_email,
+      display_name: row.display_name,
+      email_aliases: this.parseStringArray(row.email_aliases_json),
+      name_aliases: this.parseStringArray(row.name_aliases_json),
+      primary_email_source: row.primary_email_source,
+      display_name_source: row.display_name_source,
+      verified_at: row.verified_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private seedMissingAccountIdentities(): void {
+    const timestamp = nowIsoUtc();
+    this.connection
+      .prepare(
+        `
+        INSERT OR IGNORE INTO account_identities (
+          account_id,
+          primary_email,
+          email_aliases_json,
+          name_aliases_json,
+          primary_email_source,
+          display_name_source,
+          verified_at,
+          updated_at
+        )
+        SELECT
+          account_id,
+          lower(email),
+          '[]',
+          '[]',
+          'configured',
+          NULL,
+          NULL,
+          @updated_at
+        FROM accounts
+        `,
+      )
+      .run({ updated_at: timestamp });
+  }
+
+  private seedOrUpdateConfiguredIdentity(account: MailAccount): void {
+    const existing = this.findAccountIdentity(account);
+    const timestamp = nowIsoUtc();
+    if (!existing) {
+      this.connection
+        .prepare(
+          `
+          INSERT INTO account_identities (
+            account_id,
+            primary_email,
+            email_aliases_json,
+            name_aliases_json,
+            primary_email_source,
+            display_name_source,
+            verified_at,
+            updated_at
+          ) VALUES (
+            @account_id,
+            @primary_email,
+            '[]',
+            '[]',
+            'configured',
+            NULL,
+            NULL,
+            @updated_at
+          )
+          `,
+        )
+        .run({
+          account_id: account.account_id,
+          primary_email: account.email.trim().toLowerCase(),
+          updated_at: timestamp,
+        });
+      return;
+    }
+
+    if (existing.primary_email_source !== "configured") {
+      return;
+    }
+
+    const primaryEmail = account.email.trim().toLowerCase();
+    if (existing.primary_email === primaryEmail) {
+      return;
+    }
+
+    this.connection
+      .prepare(
+        `
+        UPDATE account_identities
+        SET primary_email = @primary_email,
+            updated_at = @updated_at
+        WHERE account_id = @account_id
+        `,
+      )
+      .run({
+        account_id: account.account_id,
+        primary_email: primaryEmail,
+        updated_at: timestamp,
+      });
+    this.clearSummariesForAccount(account.account_id);
+  }
+
+  private clearSummariesForAccount(accountId: string): void {
+    this.connection
+      .prepare(
+        `
+        DELETE FROM summaries
+        WHERE thread_ref IN (
+          SELECT thread_ref
+          FROM threads
+          WHERE account_id = ?
+        )
+        `,
+      )
+      .run(accountId);
+  }
+
   upsertAccount(input: {
     name: string;
     provider: MailAccount["provider"];
@@ -290,7 +481,9 @@ export class SurfaceDatabase {
           email: input.email,
           updated_at: timestamp,
         });
-      return this.findAccountByName(input.name)!;
+      const account = this.findAccountByName(input.name)!;
+      this.seedOrUpdateConfiguredIdentity(account);
+      return account;
     }
 
     const account: MailAccount = {
@@ -327,7 +520,176 @@ export class SurfaceDatabase {
       )
       .run(account);
 
+    this.seedOrUpdateConfiguredIdentity(account);
     return account;
+  }
+
+  findAccountIdentity(account: MailAccount): AccountIdentity | undefined {
+    const row = this.connection
+      .prepare(
+        `
+        SELECT
+          account_id,
+          primary_email,
+          display_name,
+          email_aliases_json,
+          name_aliases_json,
+          primary_email_source,
+          display_name_source,
+          verified_at,
+          updated_at
+        FROM account_identities
+        WHERE account_id = ?
+        LIMIT 1
+        `,
+      )
+      .get(account.account_id) as StoredAccountIdentityRecord | undefined;
+    return row ? this.rowToAccountIdentity(row) : undefined;
+  }
+
+  getAccountIdentity(account: MailAccount): AccountIdentity {
+    const existing = this.findAccountIdentity(account);
+    if (existing) {
+      return existing;
+    }
+    this.seedOrUpdateConfiguredIdentity(account);
+    const seeded = this.findAccountIdentity(account);
+    if (!seeded) {
+      throw new Error(`Account identity could not be created for account '${account.name}'.`);
+    }
+    return seeded;
+  }
+
+  updateAccountIdentityFromUser(
+    account: MailAccount,
+    input: {
+      primary_email?: string | undefined;
+      display_name?: string | undefined;
+      email_aliases?: string[] | undefined;
+      name_aliases?: string[] | undefined;
+      clear_email_aliases?: boolean | undefined;
+      clear_name_aliases?: boolean | undefined;
+    },
+  ): AccountIdentity {
+    const existing = this.getAccountIdentity(account);
+    const timestamp = nowIsoUtc();
+    const primaryEmail = input.primary_email?.trim().toLowerCase() ?? existing.primary_email;
+    const displayName = input.display_name?.trim().replace(/\s+/g, " ") ?? existing.display_name;
+    const emailAliases = this.normalizeEmailList([
+      ...(input.clear_email_aliases ? [] : existing.email_aliases),
+      ...(input.email_aliases ?? []),
+    ].filter((email) => email.trim().toLowerCase() !== primaryEmail));
+    const nameAliases = this.normalizeNameList([
+      ...(input.clear_name_aliases ? [] : existing.name_aliases),
+      ...(input.name_aliases ?? []),
+    ].filter((name) => name.trim().replace(/\s+/g, " ") !== displayName));
+
+    this.connection
+      .prepare(
+        `
+        UPDATE account_identities
+        SET primary_email = @primary_email,
+            display_name = @display_name,
+            email_aliases_json = @email_aliases_json,
+            name_aliases_json = @name_aliases_json,
+            primary_email_source = @primary_email_source,
+            display_name_source = @display_name_source,
+            verified_at = @verified_at,
+            updated_at = @updated_at
+        WHERE account_id = @account_id
+        `,
+      )
+      .run({
+        account_id: account.account_id,
+        primary_email: primaryEmail,
+        display_name: displayName,
+        email_aliases_json: JSON.stringify(emailAliases),
+        name_aliases_json: JSON.stringify(nameAliases),
+        primary_email_source: input.primary_email ? "user_confirmed" : existing.primary_email_source,
+        display_name_source: input.display_name ? "user_confirmed" : existing.display_name_source,
+        verified_at: input.primary_email ? timestamp : existing.verified_at,
+        updated_at: timestamp,
+      });
+
+    if (input.primary_email) {
+      this.connection
+        .prepare(
+          `
+          UPDATE accounts
+          SET email = @email,
+              updated_at = @updated_at
+          WHERE account_id = @account_id
+          `,
+        )
+        .run({
+          account_id: account.account_id,
+          email: primaryEmail,
+          updated_at: timestamp,
+        });
+    }
+
+    this.clearSummariesForAccount(account.account_id);
+
+    return this.getAccountIdentity(account);
+  }
+
+  updateAccountIdentityFromProvider(account: MailAccount, authenticatedEmail: string): AccountIdentity {
+    const existing = this.getAccountIdentity(account);
+    const timestamp = nowIsoUtc();
+    const primaryEmail = authenticatedEmail.trim().toLowerCase();
+    const emailAliases = this.normalizeEmailList([
+      ...existing.email_aliases,
+      ...(existing.primary_email
+        && existing.primary_email !== primaryEmail
+        && !this.isPlaceholderEmail(existing.primary_email)
+        ? [existing.primary_email]
+        : []),
+    ].filter((email) => email.trim().toLowerCase() !== primaryEmail));
+    const identityChanged =
+      primaryEmail !== existing.primary_email
+      || existing.primary_email_source !== "provider_verified"
+      || JSON.stringify(emailAliases) !== JSON.stringify(existing.email_aliases);
+
+    this.connection
+      .prepare(
+        `
+        UPDATE account_identities
+        SET primary_email = @primary_email,
+            email_aliases_json = @email_aliases_json,
+            primary_email_source = 'provider_verified',
+            verified_at = @verified_at,
+            updated_at = @updated_at
+        WHERE account_id = @account_id
+        `,
+      )
+      .run({
+        account_id: account.account_id,
+        primary_email: primaryEmail,
+        email_aliases_json: JSON.stringify(emailAliases),
+        verified_at: timestamp,
+        updated_at: timestamp,
+      });
+
+    this.connection
+      .prepare(
+        `
+        UPDATE accounts
+        SET email = @email,
+            updated_at = @updated_at
+        WHERE account_id = @account_id
+        `,
+      )
+      .run({
+        account_id: account.account_id,
+        email: primaryEmail,
+        updated_at: timestamp,
+      });
+
+    if (identityChanged) {
+      this.clearSummariesForAccount(account.account_id);
+    }
+
+    return this.getAccountIdentity({ ...account, email: primaryEmail });
   }
 
   listAccounts(): MailAccount[] {

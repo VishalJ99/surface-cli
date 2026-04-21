@@ -22,6 +22,8 @@ Current command surface:
 ```bash
 surface account add work --provider gmail --transport gmail-api --email me@company.com
 surface account add school --provider outlook --transport outlook-web-playwright --email me@school.edu
+surface account identity set school --name "Your Name" --name-alias "FirstName"
+surface account identity show school
 
 surface auth login work
 surface auth status
@@ -64,6 +66,8 @@ surface cache clear --account work
 - Attachment download is separate from `read`.
 - Machine-facing commands emit JSON on stdout.
 - SQLite is the local source of truth for refs and cache metadata.
+- Account-owner identity is stored in SQLite and used so summaries can interpret `needs_action`
+  from the selected account owner's perspective.
 
 See the source-of-truth docs for the exact contracts:
 
@@ -146,8 +150,9 @@ Typical flow:
 
 1. install Surface on that machine
 2. add accounts there
-3. run `surface auth login <account>` there
-4. use that same machine for normal `surface mail ...` commands
+3. optionally set account-owner name/aliases with `surface account identity set <account> ...`
+4. run `surface auth login <account>` there
+5. use that same machine for normal `surface mail ...` commands
 
 Gmail:
 
@@ -157,12 +162,15 @@ Gmail:
   - `surface account add personal --provider gmail --transport gmail-api --email you@example.com`
 - run:
   - `surface auth login personal`
+- Gmail auth verifies the mailbox email and updates account-owner identity automatically.
 
 For Outlook auth:
 
 - `surface auth login <account>` opens Chrome against the account profile directory
 - `surface auth status [account]` probes Outlook headlessly and reports whether the profile lands in the mailbox or a sign-in flow
 - `surface auth logout <account>` clears the stored Outlook profile for that account
+- if the Outlook account email is opaque or placeholder-like, set identity explicitly:
+  - `surface account identity set uni --email you@school.edu --name "Your Name" --name-alias "FirstName"`
 
 ### Headless Remote Setup
 
@@ -172,6 +180,8 @@ In this mode:
 
 - install Surface on the remote machine first
 - add accounts on the remote machine first
+- set account-owner identity on the remote machine when the mailbox address is opaque or
+  placeholder-like
 - the remote machine is the source of truth for all Surface state
 - install Surface locally too if you want to use `--remote-host` auth helpers
 - `--remote-host` assumes the named account already exists on the remote machine
@@ -183,7 +193,7 @@ In this mode:
 
 The remote host is the real Surface runtime. Your local machine is only a browser helper.
 
-1. on the remote host, install Surface and add the Gmail account
+1. on the remote host, install Surface, add the Gmail account, and optionally set identity aliases
 2. on the local machine, ensure `surface` is installed too
 3. on the local machine, run:
 
@@ -207,7 +217,7 @@ What happens:
 The remote host is again the real Surface runtime. Your local machine is only an auth/bootstrap
 helper.
 
-1. on the remote host, install Surface and add the Outlook account
+1. on the remote host, install Surface, add the Outlook account, and set identity aliases if needed
 2. on the local machine, ensure `surface` is installed too
 3. on the local machine, run:
 

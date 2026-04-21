@@ -17,6 +17,7 @@ stale, truncated, or explicitly refreshed.
 SQLite should store enough information to resolve refs and power later commands:
 
 - accounts
+- account-owner identity used by ME-scoped summaries
 - `thread_ref`
 - `message_ref`
 - thread/message relationship
@@ -36,9 +37,11 @@ SQLite should store enough information to resolve refs and power later commands:
 - `search` and `fetch-unread` should upsert results into SQLite.
 - In the first implementation slice, they should cache full normalized non-summary body content without truncation.
 - `search`, `fetch-unread`, and `thread get --refresh` should persist normalized thread/message state before summary generation.
+- Account-owner identity should live in SQLite with primary email, display name, aliases, source/trust metadata, verification time, and update time.
 - Summaries should live in SQLite with backend, model, brief, action flags, importance, fingerprint, and generation time.
 - When the canonical summary fingerprint is unchanged for the same backend/model, Surface should reuse the stored summary instead of regenerating it.
-- Summary fingerprints are computed over the canonical summary payload, including the configured `summary_input_max_bytes` clipping policy, not over the entire cached thread body corpus.
+- Summary fingerprints are computed over the canonical summary payload, including the configured `summary_input_max_bytes` clipping policy, prompt version, and account-owner identity semantics, not over the entire cached thread body corpus.
+- When account-owner identity changes, Surface should clear stored summaries for that account so cache-only reads do not expose stale `needs_action` values.
 - Warm session rows should persist session id, account binding, socket path, pid, status, expiry settings, and last-used timestamps.
 - `read <message_ref>` should check local state first.
 - On cache miss, truncation, or refresh, `read` should fetch live and update local state.

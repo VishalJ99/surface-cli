@@ -681,7 +681,7 @@ async function refreshOutlookConversationWithSession(
   });
   const bundle = await fetchConversationBundle(browserSession.context.request, capturedSession, conversationId);
   const persisted = await persistThreads(account, context, [normalizeThread(bundle)]);
-  await summarizeAndPersistThreads(persisted, context.config, context.db);
+  await summarizeAndPersistThreads(persisted, context.config, context.db, context.db.getAccountIdentity(account));
 }
 
 async function refreshOutlookConversation(
@@ -1465,7 +1465,7 @@ async function fetchOutlookThreadsWithSession(
   const persisted = await persistThreads(account, context, limited);
   return options.summarize === false
     ? persisted
-    : await summarizeAndPersistThreads(persisted, context.config, context.db);
+    : await summarizeAndPersistThreads(persisted, context.config, context.db, context.db.getAccountIdentity(account));
 }
 
 async function fetchOutlookThreads(

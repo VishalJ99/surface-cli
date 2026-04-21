@@ -24,6 +24,9 @@ Suggested default path:
 Surface should create this file automatically when missing. It is for local policy and
 preferences only, not account registry or auth state.
 
+Account-owner identity for ME-scoped summaries also lives in SQLite account state, not in
+`config.toml`.
+
 ## V1 Global Settings
 
 ### Storage
@@ -146,6 +149,8 @@ with `surface auth status <account>` there.
 Shared remote-auth behavior:
 
 - the account must already exist on the remote host
+- account-owner identity should be configured on the host that actually runs day-to-day `surface`
+  commands, because that host owns SQLite state used by summaries
 - if the remote account currently reports `status = "authenticated"`, Surface warns before
   replacing the remote auth state
 - if the remote account is missing auth state or reports `status = "unauthenticated"`, Surface
@@ -184,3 +189,4 @@ Current write-path behavior:
 - defining truncation configuration before truncation is implemented
 - defining provider-specific draft lifecycle commands before the first `--draft` implementation lands
 - mirroring account add/remove/auth state into `config.toml`
+- storing account-owner display names or aliases here

@@ -57,6 +57,14 @@ surface account add personal_2 --provider gmail --transport gmail-api --email yo
 surface account add uni --provider outlook --transport outlook-web-playwright --email you@example.com
 ```
 
+For reliable `summary.needs_action`, Surface should know who the account owner is. Gmail auth can
+verify the mailbox email automatically; Outlook may need explicit human identifiers:
+
+```bash
+surface account identity set uni --email you@example.com --name "Your Name" --name-alias "FirstName"
+surface account identity show uni
+```
+
 Log in:
 
 ```bash
@@ -161,11 +169,14 @@ surface mail rsvp msg_01... --response accept
 
 1. Start with `surface account list` if the target account is unclear.
 2. Use `surface auth status` before assuming a provider is ready.
-3. For triage, prefer `fetch-unread` or `search` and inspect the returned thread/message refs.
-4. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
-5. Use `surface mail thread get <thread_ref> --refresh` when you need the latest full state of one watched conversation.
-6. Read only the messages you need with `surface mail read <message_ref>`.
-7. Act using refs from Surface output. Do not rely on array positions from previous JSON.
+3. Use `surface account identity show <account>` if `summary.needs_action` looks wrong; add
+   `--name-alias` or `--email-alias` with `surface account identity set` when the mailbox address
+   alone is not enough to identify the user in message bodies.
+4. For triage, prefer `fetch-unread` or `search` and inspect the returned thread/message refs.
+5. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
+6. Use `surface mail thread get <thread_ref> --refresh` when you need the latest full state of one watched conversation.
+7. Read only the messages you need with `surface mail read <message_ref>`.
+8. Act using refs from Surface output. Do not rely on array positions from previous JSON.
 
 ## Important Rules
 

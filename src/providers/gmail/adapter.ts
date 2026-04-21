@@ -1010,7 +1010,7 @@ async function fetchAndPersistGmailThread(
   const thread = await getGmailThread(account, context, threadId);
   const normalized = await normalizeGmailThread(account, context, thread);
   const persisted = await persistThreads(account, context, [normalized]);
-  await summarizeAndPersistThreads(persisted, context.config, context.db);
+  await summarizeAndPersistThreads(persisted, context.config, context.db, context.db.getAccountIdentity(account));
 }
 
 async function refreshStoredMessage(
@@ -1286,7 +1286,7 @@ async function fetchGmailThreads(
 
   const normalized = await Promise.all(hydrated.map((thread) => normalizeGmailThread(account, context, thread)));
   const persisted = await persistThreads(account, context, normalized);
-  return summarizeAndPersistThreads(persisted, context.config, context.db);
+  return summarizeAndPersistThreads(persisted, context.config, context.db, context.db.getAccountIdentity(account));
 }
 
 async function sendOrDraftGmailMessage(
@@ -1325,13 +1325,8 @@ export class GmailApiAdapter implements MailProviderAdapter {
 
   async login(account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
     const result = await runGmailLogin(account, context);
-    if (result.authenticatedEmail && result.authenticatedEmail !== account.email) {
-      context.db.upsertAccount({
-        name: account.name,
-        provider: account.provider,
-        transport: account.transport,
-        email: result.authenticatedEmail,
-      });
+    if (result.authenticatedEmail) {
+      context.db.updateAccountIdentityFromProvider(account, result.authenticatedEmail);
     }
 
     return {
@@ -1352,6 +1347,9 @@ export class GmailApiAdapter implements MailProviderAdapter {
 
   async authStatus(account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
     const status = await gmailAuthStatus(account, context);
+    if (status.authenticatedEmail) {
+      context.db.updateAccountIdentityFromProvider(account, status.authenticatedEmail);
+    }
     return status.authenticated
       ? { status: "authenticated", detail: status.detail }
       : { status: "unauthenticated", detail: status.detail };
