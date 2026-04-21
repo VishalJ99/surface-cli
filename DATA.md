@@ -1,0 +1,1 @@
+- `outputs/` — Local-only generated reports and benchmark artifacts. May contain private mailbox content; ignored by git and not suitable for repository commits.
