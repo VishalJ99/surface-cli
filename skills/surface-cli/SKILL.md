@@ -121,6 +121,26 @@ surface mail search --account personal_2 --mailbox inbox --label unread --text "
 surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
 ```
 
+### Watching Threads And Topics
+
+Surface is the polling primitive, not the scheduler or delivery transport. If the user asks to
+watch mail, use the surrounding automation system to rerun Surface commands and surface updates to
+the user-requested destination.
+
+- For a specific thread watch, persist the `account`, `thread_ref`, and the newest known
+  message/timestamp. On each check, rerun `surface mail thread get <thread_ref> --refresh` and
+  notify only when the newest message state changes.
+- For a topic watch, establish a baseline with `search`, then use periodic `fetch-unread` checks
+  to catch new inbox arrivals and targeted `search` checks when the topic has clear `--from`,
+  `--subject`, `--mailbox`, `--label`, or `--text` filters.
+- Do not assume a delivery target. Return updates through the current agent conversation or the
+  explicit destination the user asked for.
+- Reasonable starting cadences are: 5-10 minutes for one active thread, 30-60 minutes for a
+  narrow topic watch, and 2-4 hours for inbox digests. Avoid sub-5-minute polling unless the user
+  explicitly asks for it.
+- For Outlook-heavy polling, keep concurrency modest and prefer one warm session per parallel
+  worker if several live checks will run close together.
+
 ### Warm Sessions
 
 ```bash
@@ -197,9 +217,15 @@ surface mail rsvp msg_01... --response accept
    alone is not enough to identify the user in message bodies.
 4. For triage, prefer `fetch-unread` or `search` and inspect the returned thread/message refs.
 5. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
-6. Use `surface mail thread get <thread_ref> --refresh` when you need the latest full state of one watched conversation.
-7. Read only the messages you need with `surface mail read <message_ref>`.
-8. Act using refs from Surface output. Do not rely on array positions from previous JSON.
+6. For a thread watch, use `surface mail thread get <thread_ref> --refresh` and compare the newest
+   message state against the stored prior observation before notifying.
+7. For a topic watch, start with `search` to set the baseline, then use `fetch-unread` for new
+   inbox arrivals plus targeted `search` when the watch has narrow filters.
+8. Read only the messages you need with `surface mail read <message_ref>`.
+9. For passive watching, do not mutate read state. If the user explicitly asks you to triage unread
+   mail and write safety is enabled, marking handled messages read after reporting is acceptable
+   unless the user asks to keep them unread.
+10. Act using refs from Surface output. Do not rely on array positions from previous JSON.
 
 ## Important Rules
 
@@ -212,6 +238,11 @@ surface mail rsvp msg_01... --response accept
 - the first session-backed Outlook query still pays mailbox setup cost; the main win is faster follow-on live reads in the same mailbox session
 - `read` does not download attachments. Use `surface attachment download`.
 - `fetch-unread` and `search` do not mutate mailbox state.
+- passive watching should stay read-only; do not mark watched mail read unless the user explicitly asks
+- if the user asks for unread triage rather than passive watching, `mark-read` or `read --mark-read`
+  is acceptable only after reporting and only when local write safety allows it
+- watcher notifications should go to the user-requested destination; do not invent a session,
+  channel, or DM target
 - `--draft` is the safe compose path when you do not need to send immediately.
 
 ## Provider Notes
