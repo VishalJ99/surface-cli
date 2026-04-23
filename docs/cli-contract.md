@@ -241,7 +241,8 @@ Each message should contain:
 
 `body.text` may include explicit inline-content markers such as `[inline image: image001.png]`
 when the original message contains embedded inline attachments that would otherwise be invisible in
-plain-text output.
+plain-text output. HTML-only hyperlinks should also preserve their target inline as
+`anchor text[https://example.com]` so cached/plain-text reads do not lose actionable URLs.
 
 ## Recommended Concrete V1 Shapes
 

@@ -88,6 +88,9 @@ Provider-specific payloads must be mapped into:
 - attachment metadata
 - provider locator data stored internally for later thread reads, message reads, and actions
 
+When a provider body comes from HTML, normalized body text should preserve hyperlink targets inline
+as `anchor text[URL]` so plain-text cache/read paths do not drop operational links.
+
 Providers should persist normalized thread/message state before summary generation so summary
 reuse can be keyed from the stored canonical thread content rather than provider-native payloads.
 

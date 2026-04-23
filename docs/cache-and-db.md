@@ -25,6 +25,7 @@ SQLite should store enough information to resolve refs and power later commands:
 - provider locator data required for later reads/actions
 - normalized envelope metadata
 - normalized body metadata
+- normalized body text should preserve HTML-only hyperlink targets inline as `anchor text[URL]`
 - truncation state
 - attachment metadata
 - summary metadata
