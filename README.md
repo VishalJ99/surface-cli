@@ -1,279 +1,285 @@
 # Surface CLI
 
-A lean, local-first mail CLI for multi-provider, multi-account email.
+Outlook and Gmail from one local, JSON-first mail CLI.
 
-Surface normalizes Gmail and Outlook behind one contract, keeps local state in SQLite,
-stores auth/cache/downloads under `~/.surface-cli`, and prints machine-readable JSON to
-stdout for automation.
+Surface solves the annoying mail automation case: you have a school or work
+Microsoft 365 account, IMAP is disabled, Graph app permissions need tenant admin
+approval, and normal mail CLIs stop there. Surface uses the Outlook web session
+you can already access in Chrome, so there is no Microsoft app registration,
+Graph permission grant, tenant consent, or IMAP toggle to ask IT for.
 
-## Current V1 Shape
+If you can sign in to Outlook on the web, Surface can give your agent a local
+CLI for that mailbox.
 
-Top-level groups:
+Surface is especially useful for coding agents and personal assistants because it
+keeps mail work compact:
 
-- `surface account`
-- `surface auth`
-- `surface session`
-- `surface mail`
-- `surface attachment`
-- `surface cache`
+- one CLI contract for Gmail and Outlook
+- multi-account support with stable account names
+- stable `thread_ref`, `message_ref`, `attachment_id`, and `session_id` values
+- thread-first `search` and `fetch-unread` results
+- optional automatic summaries for search/fetch triage, with cached summary reuse
+  so repeated checks do not keep bloating context
+- local SQLite state, cached bodies, auth profiles, and downloads under
+  `~/.surface-cli`
+- first-class headless/remote setup for Mac mini, VM, or server hosts
 
-Current command surface:
+Surface is not an admin bypass. It uses the same mailbox access you already have.
+If your organization blocks Outlook on the web or browser automation entirely,
+Surface cannot override that policy.
+
+## Fast Install
+
+Surface requires Node.js 20 or newer.
+
+Install the CLI first:
 
 ```bash
-surface account add work --provider gmail --email me@company.com
-surface account add school --provider outlook --email me@school.edu
-surface account identity set school --name "Your Name" --name-alias "FirstName"
-surface account identity show school
+npm install -g surface-cli
+surface --help
+```
 
-surface auth login work
-surface auth status
-surface auth logout school
+Then install the skill for the agent you use.
 
-surface session start --account school
-surface session list
+### OpenClaw
+
+OpenClaw installs the hosted Surface skill from ClawHub:
+
+```bash
+openclaw skills install surface-cli
+openclaw skills check
+```
+
+If `openclaw skills check` reports the `surface` binary as missing, run
+`npm install -g surface-cli` on that same machine.
+
+### Codex
+
+Codex reads user skills from `~/.agents/skills`:
+
+```bash
+mkdir -p ~/.agents/skills/surface-cli
+curl -fsSL https://raw.githubusercontent.com/VishalJ99/surface-cli/main/skills/surface-cli/SKILL.md \
+  -o ~/.agents/skills/surface-cli/SKILL.md
+```
+
+Restart Codex if the skill does not appear immediately. Codex can invoke it
+automatically from the description, or you can mention `$surface-cli`.
+
+### Claude Code
+
+Claude Code reads personal skills from `~/.claude/skills`:
+
+```bash
+mkdir -p ~/.claude/skills/surface-cli
+curl -fsSL https://raw.githubusercontent.com/VishalJ99/surface-cli/main/skills/surface-cli/SKILL.md \
+  -o ~/.claude/skills/surface-cli/SKILL.md
+```
+
+Claude Code exposes the skill as `/surface-cli` and may also load it
+automatically when the task matches the skill description.
+
+## Setup
+
+Add the accounts you want Surface to manage:
+
+```bash
+surface account add uni --provider outlook --email you@school.edu
+surface account add personal --provider gmail --email you@gmail.com
+surface account list
+```
+
+For Outlook school/work accounts, set the mailbox owner's identity explicitly.
+This helps summaries decide whether a thread needs action from you:
+
+```bash
+surface account identity set uni \
+  --email you@school.edu \
+  --name "Your Name" \
+  --name-alias "FirstName"
+```
+
+Log in:
+
+```bash
+surface auth login uni
+surface auth status uni
+```
+
+Outlook auth opens Chrome and stores a dedicated browser profile under
+`~/.surface-cli/auth/<account_id>/profile`. You do not need Azure, Graph, IMAP,
+Exchange app passwords, or admin approval. You do need Chrome and the ability to
+complete your normal Microsoft sign-in flow.
+
+For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
+stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
+client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.
+
+## Headless Remote Setup
+
+Surface is designed for remote hosts, including a Mac mini or other headless box
+running OpenClaw, Codex, or Claude Code.
+
+The rule is simple: install Surface and the agent skill on the machine where the
+agent will run day to day. That machine is the canonical Surface host and owns:
+
+```text
+~/.surface-cli/state.db
+~/.surface-cli/auth/
+~/.surface-cli/cache/
+~/.surface-cli/downloads/
+```
+
+Use your laptop only as an auth helper when the host cannot show a browser.
+
+For example, if OpenClaw runs on a Mac mini, install both pieces there:
+
+```bash
+ssh macmini 'npm install -g surface-cli && openclaw skills install surface-cli'
+```
+
+If Codex or Claude Code runs on the remote host instead, run the matching skill
+install command from the Fast Install section inside that remote shell.
+
+Outlook remote setup:
+
+```bash
+ssh macmini 'surface account add uni --provider outlook --email you@school.edu'
+ssh macmini 'surface account identity set uni --email you@school.edu --name "Your Name"'
+
+surface auth login uni --remote-host macmini
+ssh macmini 'surface auth status uni'
+```
+
+The remote Outlook auth flow opens Chrome locally, lets you complete Microsoft
+sign-in on your laptop, syncs the dedicated Surface browser profile to the remote
+host, then validates it there.
+
+Gmail uses the same public remote command:
+
+```bash
+surface auth login personal --remote-host macmini
+```
+
+For Gmail, Surface starts SSH port forwarding so the OAuth callback lands on the
+remote Surface process and the refresh token is stored on the remote host.
+
+## Token-Efficient Mail Triage
+
+Surface commands print JSON on stdout. Agents should parse the JSON and act on
+stable refs rather than scraping terminal text or copying whole mail bodies into
+chat.
+
+Fetch unread threads:
+
+```bash
+surface mail fetch-unread --account uni --limit 10
+```
+
+Search with structured filters:
+
+```bash
+surface mail search --account uni --from registrar@school.edu --subject "deadline" --limit 10
+surface mail search --account personal --mailbox inbox --label unread --text "invoice" --limit 10
+```
+
+Read only the thread or message you need:
+
+```bash
+surface mail thread get thr_01...
+surface mail thread get thr_01... --refresh
+surface mail read msg_01...
+surface mail read msg_01... --refresh
+```
+
+For Outlook-heavy sessions, start a warm browser session and pass its `session_id`
+to follow-up read commands:
+
+```bash
+surface session start --account uni
+surface mail fetch-unread --account uni --session sess_01... --limit 10
+surface mail search --account uni --session sess_01... --text "exam board" --limit 10
 surface session stop sess_01...
+```
 
-surface mail fetch-unread --account work --limit 25
-surface mail fetch-unread --account school --session sess_01... --limit 25
-surface mail search --account work --text invoice --subject overdue --limit 10
-surface mail search --account school --session sess_01... --from billing@vendor.com --limit 10
-surface mail search --account work --from billing@vendor.com --mailbox inbox --label unread --limit 10
-surface mail thread get thr_01... --refresh --session sess_01...
-surface mail read msg_01... --refresh --session sess_01...
-surface mail send --account school --to me@example.com --subject "hello" --body "test"
-surface mail send --account school --to me@example.com --subject "hello" --body "test" --draft
-surface mail reply msg_01... --body "Thanks"
-surface mail reply-all msg_01... --body "Thanks all"
-surface mail forward msg_01... --to me@example.com --body "FYI"
-surface mail archive msg_01...
-surface mail rsvp msg_01... --response tentative
+Optional summaries are controlled locally. New configs default to
+`summarizer_backend = "none"` so mail reads never require paid or external model
+calls unless you opt in. To enable summaries, set `summarizer_backend` in
+`~/.surface-cli/config.toml` or `SURFACE_SUMMARIZER_BACKEND` in the environment.
+
+Supported summary backends:
+
+- `openrouter`, using `OPENROUTER_API_KEY`
+- `openclaw`, using the local `openclaw` CLI
+
+When summaries are enabled, Surface summarizes a capped canonical per-thread
+payload, stores summary fingerprints in SQLite, and reuses matching summaries on
+later checks. This keeps recurring inbox watches and searches from repeatedly
+feeding unchanged threads back into your agent context.
+
+Email content may be sent to the configured summarizer provider when summaries
+are enabled. Keep `summarizer_backend = "none"` if all mail content must remain
+local to the provider and Surface cache.
+
+## Common Commands
+
+```bash
+surface account list
+surface account identity show uni
+
+surface auth status
+surface auth logout uni
+
+surface mail fetch-unread --account uni --limit 25
+surface mail search --account uni --text "project update" --limit 10
+surface mail thread get thr_01... --refresh
+surface mail read msg_01... --refresh
 
 surface attachment list msg_01...
 surface attachment download msg_01... att_01...
 
+surface mail send --account uni --to you@example.com --subject "hello" --body "test" --draft
+surface mail reply msg_01... --body "Thanks" --draft
+surface mail archive msg_01...
+surface mail mark-read msg_01...
+surface mail mark-unread msg_01...
+surface mail rsvp msg_01... --response tentative
+
 surface cache stats
 surface cache prune
-surface cache clear --account work
 ```
 
-## Core Decisions
+Write actions are guarded by local policy in `~/.surface-cli/config.toml` and
+`SURFACE_*` environment variables. Use `--draft` for safe compose flows unless
+you have explicitly enabled live sends.
 
-- `fetch-unread` is the public command name.
-- Threads are the top-level result unit.
-- Messages are elements within a thread.
-- `thread get` takes a stable `thread_ref`.
-- `read` takes a stable `message_ref`.
-- Attachment download is separate from `read`.
-- Machine-facing commands emit JSON on stdout.
-- SQLite is the local source of truth for refs and cache metadata.
-- Account-owner identity is stored in SQLite and used so summaries can interpret `needs_action`
-  from the selected account owner's perspective.
+## What Works Today
 
-See the source-of-truth docs for the exact contracts:
+Surface v1 supports:
 
-- `docs/cli-contract.md`
-- `docs/provider-contract.md`
-- `docs/cache-and-db.md`
-- `docs/config.md`
+- Gmail via Google APIs
+- Outlook via Outlook Web and Playwright
+- account add/list/remove
+- auth login/status/logout
+- account-owner identity for summaries
+- `search` and `fetch-unread`
+- thread refresh and message read
+- attachment list/download
+- send/reply/reply-all/forward with `--draft`
+- archive, mark-read, mark-unread, RSVP
+- Outlook warm sessions for repeated read-path commands
+- optional summaries through OpenRouter or OpenClaw
 
-## Current Implementation Status
-
-The repo now contains a working TypeScript scaffold under `src/`:
-
-- CLI entrypoint and command groups
-- config loading from `~/.surface-cli/config.toml`
-- SQLite-backed local account state
-- adapter registry for `gmail-api` and `outlook-web-playwright`
-- donor normalization utilities ported from the legacy Surface repo for Gmail and Outlook
-- Gmail OAuth login wired to Google desktop-app OAuth with stored refresh tokens under `~/.surface-cli/auth/<account_id>/gmail-token.json`
-- live Gmail `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
-- Outlook Playwright auth lifecycle wired to persistent profiles under `~/.surface-cli/auth/<account_id>/profile`
-- live Outlook `fetch-unread`, structured `search`, `thread get`, `read`, `attachment list`, `attachment download`, `send`, `reply`, `reply-all`, `forward`, `archive`, `mark-read`, `mark-unread`, `rsvp`, and `--draft` on send-like actions
-- explicit warm session ids for Outlook read-path chaining (`session start/list/stop`, plus `--session` on `search`, `fetch-unread`, `thread get --refresh`, and `read`)
-- summary backends for `openrouter` and `openclaw`, with `openai/gpt-5.4-mini` as the default
-  OpenRouter summarizer model when summarization is enabled
-- lean opt-in Outlook v1 and Gmail v1 live e2e coverage via `npm run e2e:outlook-v1` and `npm run e2e:gmail-v1`
-
-What is still intentionally incomplete:
+Intentionally incomplete:
 
 - draft lifecycle commands
-- move / delete
-- broader automated coverage beyond the opt-in provider v1 e2e scripts and cache-prune policy
+- move/delete
+- broad automated live coverage beyond the opt-in Gmail and Outlook v1 e2e
+  scripts
 
-## Setup
+## State And Config
 
-Surface supports two setup modes:
-
-- standard single-machine setup
-  Surface runs on the same machine where you can access the browser, localhost callback ports,
-  and any required GUI prompts
-- headless remote setup
-  Surface runs on a remote machine such as a Mac mini, while a second local machine helps with
-  Gmail OAuth browser approval or Outlook browser-profile bootstrap
-
-The correct split is:
-
-- the machine that actually runs `surface` for day-to-day mail work is the canonical Surface host
-- that host owns:
-  - `~/.surface-cli/state.db`
-  - `~/.surface-cli/auth/`
-  - `~/.surface-cli/cache/`
-  - `~/.surface-cli/downloads/`
-- `~/.surface-cli/config.toml` is auto-created on first run and stores local policy only
-  such as summarizer and write-safety settings
-- account registry and auth state do not live in `config.toml`
-- existing config files are not rewritten on upgrade; if an older config names
-  `summarizer_model = "openai/gpt-4o-mini"`, change it to
-  `summarizer_model = "openai/gpt-5.4-mini"` for the current recommended default
-
-### Install Surface
-
-For development from a checkout:
-
-```bash
-npm install
-npm run build
-npm link
-```
-
-For a published install, use npm:
-
-```bash
-npm install -g surface-cli
-```
-
-### Standard Single-Machine Setup
-
-Use this when the same machine can:
-
-- open Chrome locally
-- receive loopback OAuth callbacks on `localhost`
-- show any required Microsoft or Google auth UI
-
-Typical flow:
-
-1. install Surface on that machine
-2. add accounts there
-3. optionally set account-owner name/aliases with `surface account identity set <account> ...`
-4. run `surface auth login <account>` there
-5. use that same machine for normal `surface mail ...` commands
-
-Gmail:
-
-- place a Google desktop OAuth client secret at `./client_secret.json` or set
-  `SURFACE_GMAIL_CLIENT_SECRET_FILE`
-- add the account first:
-  - `surface account add personal --provider gmail --email you@example.com`
-- run:
-  - `surface auth login personal`
-- Gmail auth verifies the mailbox email and updates account-owner identity automatically.
-
-For Outlook auth:
-
-- `surface auth login <account>` opens Chrome against the account profile directory
-- `surface auth status [account]` probes Outlook headlessly and reports whether the profile lands in the mailbox or a sign-in flow
-- `surface auth logout <account>` clears the stored Outlook profile for that account
-- if the Outlook account email is opaque or placeholder-like, set identity explicitly:
-  - `surface account identity set uni --email you@school.edu --name "Your Name" --name-alias "FirstName"`
-
-### Headless Remote Setup
-
-Use this when your real Surface host is remote, for example a headless Mac mini, VM, or server.
-
-In this mode:
-
-- install Surface on the remote machine first
-- add accounts on the remote machine first
-- set account-owner identity on the remote machine when the mailbox address is opaque or
-  placeholder-like
-- the remote machine is the source of truth for all Surface state
-- install Surface locally too if you want to use `--remote-host` auth helpers
-- `--remote-host` assumes the named account already exists on the remote machine
-- remote auth only warns before replacement when the remote account already reports `authenticated`
-- if the remote auth-state probe times out or fails, Surface proceeds without an overwrite warning
-  instead of blocking the remote auth flow
-
-#### Gmail On A Headless Remote Host
-
-The remote host is the real Surface runtime. Your local machine is only a browser helper.
-
-1. on the remote host, install Surface, add the Gmail account, and optionally set identity aliases
-2. on the local machine, ensure `surface` is installed too
-3. on the local machine, run:
-
-```bash
-surface auth login <gmail-account> --remote-host <ssh-host>
-```
-
-What happens:
-
-- Surface starts SSH port forwarding first
-- Surface reuses the remote account's stored `client_secret.json` when present
-- Surface runs the Gmail OAuth listener on the remote host
-- if the remote host does not already have Gmail OAuth client credentials stored for that account,
-  Surface falls back to a local `client_secret.json` or `SURFACE_GMAIL_CLIENT_SECRET_FILE`
-- you open the Google auth URL locally
-- the OAuth callback is forwarded back to the remote host
-- the refresh token is stored on the remote host under `~/.surface-cli/auth/<account_id>/`
-
-#### Outlook On A Headless Remote Host
-
-The remote host is again the real Surface runtime. Your local machine is only an auth/bootstrap
-helper.
-
-1. on the remote host, install Surface, add the Outlook account, and set identity aliases if needed
-2. on the local machine, ensure `surface` is installed too
-3. on the local machine, run:
-
-```bash
-surface auth login <outlook-account> --remote-host <ssh-host>
-```
-
-What happens:
-
-- Surface opens local Chrome in a dedicated Surface profile
-- you complete the Microsoft sign-in locally
-- Surface syncs that profile to the remote host
-- Surface validates the copied profile on the remote host with `surface auth status <account>`
-
-This is why headless remote auth currently requires `surface` to exist on both machines:
-
-- local machine: helper for browser/UI work
-- remote machine: canonical Surface runtime and state owner
-
-If Chrome is installed in a non-default location, set:
-
-```bash
-export SURFACE_CHROME_PATH="/absolute/path/to/Google Chrome"
-```
-
-For the live Outlook v1 e2e script:
-
-```bash
-export SURFACE_E2E_ENABLE=1
-export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
-export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
-npm run e2e:outlook-v1
-```
-
-For the live Gmail v1 e2e script:
-
-```bash
-export SURFACE_E2E_ENABLE=1
-export SURFACE_E2E_ACCOUNT='personal_2'
-npm run e2e:gmail-v1
-```
-
-For live write-path testing, also set:
-
-```bash
-export SURFACE_WRITES_ENABLED=1
-export SURFACE_SEND_MODE=allow_send
-export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
-export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
-```
-
-## Local State
+Surface stores local state under `~/.surface-cli`:
 
 ```text
 ~/.surface-cli/
@@ -290,6 +296,26 @@ export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
       <message_ref>/
 ```
 
+`config.toml` stores local policy and preferences only. Account registry, auth
+material, cache metadata, and account-owner identity live in SQLite and auth
+storage, not in `config.toml`.
+
+## Contract Docs
+
+These are the source-of-truth docs for behavior changes:
+
+- `docs/cli-contract.md`
+- `docs/provider-contract.md`
+- `docs/cache-and-db.md`
+- `docs/config.md`
+- `docs/decisions/`
+
+External skill docs:
+
+- OpenClaw skills: https://docs.openclaw.ai/cli/skills
+- Codex skills: https://developers.openai.com/codex/skills
+- Claude Code skills: https://code.claude.com/docs/en/skills
+
 ## Development
 
 ```bash
@@ -299,22 +325,47 @@ npm run build
 npm run surface -- --help
 ```
 
+For live Outlook v1 e2e:
+
+```bash
+export SURFACE_E2E_ENABLE=1
+export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
+export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
+npm run e2e:outlook-v1
+```
+
+For live Gmail v1 e2e:
+
+```bash
+export SURFACE_E2E_ENABLE=1
+export SURFACE_E2E_ACCOUNT='personal'
+npm run e2e:gmail-v1
+```
+
+For live write-path testing:
+
+```bash
+export SURFACE_WRITES_ENABLED=1
+export SURFACE_SEND_MODE=allow_send
+export SURFACE_TEST_RECIPIENTS='sender@example.com,recipient@example.com,observer@example.com'
+export SURFACE_TEST_ACCOUNT_ALLOWLIST='uni'
+```
+
 ## Publish To ClawHub
 
-ClawHub publishes the skill folder, not the whole repo. The publish unit is:
+ClawHub publishes the skill folder, not the whole repo:
 
 ```text
 skills/surface-cli/
   SKILL.md
 ```
 
-Recommended release order:
+Release order:
 
-1. publish the CLI package to npm so ClawHub can install `surface`
-2. log into ClawHub
+1. publish the CLI package to npm so the skill can install `surface`
+2. sync the intended `SKILL.md` into the active OpenClaw workspace if needed
 3. publish the skill folder
-
-Example:
+4. inspect the hosted skill
 
 ```bash
 npm publish
@@ -324,6 +375,9 @@ clawhub publish ./skills/surface-cli \
   --name "Surface CLI" \
   --version <version> \
   --changelog "<release notes>"
+
+clawhub inspect surface-cli --json
+clawhub inspect surface-cli --file SKILL.md
 ```
 
 Before publishing, verify the package payload:
