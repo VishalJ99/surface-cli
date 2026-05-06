@@ -58,3 +58,4 @@ Use zero-padded sequential numbers:
 - `0034-default-account-transport-from-provider.md`
 - `0035-use-gpt-5-4-mini-as-default-openrouter-summarizer.md`
 - `0036-html-hyperlinks-are-preserved-inline-in-body-text.md`
+- `0037-bounded-unread-state-refresh.md`

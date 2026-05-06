@@ -11,6 +11,7 @@ import { toPublicThread } from "./lib/public-mail.js";
 import { runRemoteAuthLogin } from "./lib/remote-auth.js";
 import { loadStoredThread, threadHasReadableCache } from "./lib/stored-mail.js";
 import { nowIsoUtc } from "./lib/time.js";
+import { syncUnreadState } from "./lib/unread-state.js";
 import { resolveProviderAdapter } from "./providers/index.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
 import {
@@ -575,6 +576,28 @@ mailCommand
           query,
           threads: threads.map(toPublicThread),
         });
+      },
+    );
+  });
+
+mailCommand
+  .command("sync-unread-state")
+  .requiredOption("--account <account>", "Logical account name")
+  .option("--session <session_id>", "Use a warm session id")
+  .addOption(new Option("--limit <limit>", "Max unread threads to fetch and local candidates to compare").argParser(positiveInt))
+  .option("--rebaseline", "Clear local unread for the account before repopulating fetched unread", false)
+  .action(async (options, command: Command) => {
+    await runAccountAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      options.account,
+      async (context) => {
+        writeJson(
+          await syncUnreadState(context, {
+            limit: options.limit ?? context.config.defaultResultLimit,
+            rebaseline: Boolean(options.rebaseline),
+            ...(options.session ? { session: options.session } : {}),
+          }),
+        );
       },
     );
   });

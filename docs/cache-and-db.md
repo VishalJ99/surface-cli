@@ -36,6 +36,9 @@ SQLite should store enough information to resolve refs and power later commands:
 ## Cache Behavior
 
 - `search` and `fetch-unread` should upsert results into SQLite.
+- `sync-unread-state` should use the same provider fetch/persist path as `fetch-unread`, then
+  reconcile local `messages.unread` and `threads.unread_count` only within its documented bounded
+  comparison window unless `--rebaseline` is explicitly passed.
 - In the first implementation slice, they should cache full normalized non-summary body content without truncation.
 - `search`, `fetch-unread`, and `thread get --refresh` should persist normalized thread/message state before summary generation.
 - Account-owner identity should live in SQLite with primary email, display name, aliases, source/trust metadata, verification time, and update time.
@@ -46,6 +49,10 @@ SQLite should store enough information to resolve refs and power later commands:
 - Warm session rows should persist session id, account binding, socket path, pid, status, expiry settings, and last-used timestamps.
 - `read <message_ref>` should check local state first.
 - On cache miss, truncation, or refresh, `read` should fetch live and update local state.
+- Bounded unread-state refresh should not require an all-history provider sweep. The default local
+  candidate set is newest-first unread messages for the account, capped by `limit`. `--rebaseline`
+  is the explicit stronger operation: clear all local unread for the account first, then repopulate
+  from fetched provider unread up to `limit` and report partial/truncated when that window is full.
 
 ## Suggested On-Disk Layout
 
