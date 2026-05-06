@@ -15,6 +15,40 @@ import { launchOutlookSession, probeOutlookAuth } from "./providers/outlook/sess
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
 import { sessionExpiry } from "./session.js";
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+interface DeadlineTimer {
+  clear(): void;
+}
+
+function setDeadlineTimer(callback: () => void, deadlineMs: number): DeadlineTimer {
+  let timer: NodeJS.Timeout | undefined;
+  let cleared = false;
+
+  const schedule = () => {
+    if (cleared) {
+      return;
+    }
+    const remaining = deadlineMs - Date.now();
+    if (remaining <= 0) {
+      callback();
+      return;
+    }
+    timer = setTimeout(schedule, Math.min(remaining, MAX_TIMER_DELAY_MS));
+  };
+
+  schedule();
+
+  return {
+    clear() {
+      cleared = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 interface DaemonArgs {
   sessionId: string;
   accountId: string;
@@ -69,8 +103,8 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const runtime = createRuntimeContext({ configPath: args.configPath });
   let closed = false;
-  let idleTimer: NodeJS.Timeout | undefined;
-  let maxAgeTimer: NodeJS.Timeout | undefined;
+  let idleTimer: DeadlineTimer | undefined;
+  let maxAgeTimer: DeadlineTimer | undefined;
   let inflight = Promise.resolve();
   let session: Awaited<ReturnType<typeof launchOutlookSession>> | undefined;
   let server: ReturnType<typeof createServer> | undefined;
@@ -102,10 +136,10 @@ async function main(): Promise<void> {
     }
     closed = true;
     if (idleTimer) {
-      clearTimeout(idleTimer);
+      idleTimer.clear();
     }
     if (maxAgeTimer) {
-      clearTimeout(maxAgeTimer);
+      maxAgeTimer.clear();
     }
     runtime.db.markSessionClosed(args.sessionId, status, {
       errorDetail: errorDetail ?? null,
@@ -143,11 +177,11 @@ async function main(): Promise<void> {
 
   const resetIdleTimer = () => {
     if (idleTimer) {
-      clearTimeout(idleTimer);
+      idleTimer.clear();
     }
-    idleTimer = setTimeout(() => {
+    idleTimer = setDeadlineTimer(() => {
       void shutdown("expired", "Session expired due to idle timeout.");
-    }, args.idleTimeoutSeconds * 1000);
+    }, Date.now() + args.idleTimeoutSeconds * 1000);
   };
 
   process.on("SIGTERM", () => {
@@ -272,9 +306,9 @@ async function main(): Promise<void> {
 
     runtime.db.markSessionRunning(args.sessionId, process.pid);
     resetIdleTimer();
-    maxAgeTimer = setTimeout(() => {
+    maxAgeTimer = setDeadlineTimer(() => {
       void shutdown("expired", "Session expired due to max age.");
-    }, args.maxAgeSeconds * 1000);
+    }, Date.now() + args.maxAgeSeconds * 1000);
   } catch (error) {
     await shutdown(
       "failed",
