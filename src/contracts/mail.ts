@@ -101,6 +101,7 @@ export interface FetchUnreadQuery {
 }
 
 export interface SentQuery {
+  thread_ref?: string;
   recipient?: string;
   limit: number;
 }

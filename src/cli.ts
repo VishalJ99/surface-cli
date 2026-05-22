@@ -588,6 +588,7 @@ mailCommand
   .description("List recent sent messages.")
   .requiredOption("--account <account>", "Logical account name")
   .option("--session <session_id>", "Use a warm session id")
+  .option("--thread <thread_ref>", "Restrict sent messages to one stable thread ref")
   .option("--recipient <email>", "Recipient filter for sent messages")
   .addOption(new Option("--limit <limit>", "Max sent messages to return").argParser(positiveInt))
   .action(async (options, command: Command) => {
@@ -596,7 +597,28 @@ mailCommand
       options.account,
       async (context) => {
         const recipient = normalizeOptionalString(options.recipient);
+        const threadRef = normalizeOptionalString(options.thread);
+        if (threadRef) {
+          const resolvedThread = context.db.findThreadByRef(threadRef);
+          if (!resolvedThread) {
+            throw new SurfaceError("not_found", `Thread '${threadRef}' was not found.`, {
+              account: context.account.name,
+              threadRef,
+            });
+          }
+          if (resolvedThread.account_id !== context.account.account_id) {
+            throw new SurfaceError(
+              "invalid_argument",
+              `Thread '${threadRef}' does not belong to account '${context.account.name}'.`,
+              {
+                account: context.account.name,
+                threadRef,
+              },
+            );
+          }
+        }
         const query = {
+          ...(threadRef ? { thread_ref: threadRef } : {}),
           ...(recipient ? { recipient } : {}),
           limit: options.limit ?? DEFAULT_SENT_LIMIT,
         };

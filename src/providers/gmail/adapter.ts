@@ -30,6 +30,7 @@ import type {
 } from "../../contracts/mail.js";
 import { SurfaceError } from "../../lib/errors.js";
 import { toPublicSentMessage } from "../../lib/public-mail.js";
+import { sentMessagesFromStoredThread } from "../../lib/sent-mail.js";
 import { assertWriteAllowed } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
@@ -1316,6 +1317,11 @@ async function fetchGmailSentMessages(
   context: ProviderContext,
   query: SentQuery,
 ): Promise<SentMessageResult[]> {
+  if (query.thread_ref) {
+    await refreshGmailThread(account, query.thread_ref, context);
+    return sentMessagesFromStoredThread(account, context, query);
+  }
+
   const queryParts = ["in:sent"];
   if (query.recipient?.trim()) {
     queryParts.push(buildGmailRecipientQuery(query.recipient));
@@ -1365,6 +1371,30 @@ async function fetchGmailSentMessages(
   }
 
   return results;
+}
+
+async function refreshGmailThread(
+  account: MailAccount,
+  threadRef: string,
+  context: ProviderContext,
+): Promise<void> {
+  const locatorRow = context.db.findProviderLocator("thread", threadRef);
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for thread '${threadRef}'.`, {
+      account: account.name,
+      threadRef,
+    });
+  }
+
+  const locator = JSON.parse(locatorRow.locator_json) as { thread_id?: string | null };
+  if (!locator.thread_id) {
+    throw new SurfaceError("transport_error", `Thread '${threadRef}' is missing a Gmail thread id.`, {
+      account: account.name,
+      threadRef,
+    });
+  }
+
+  await fetchAndPersistGmailThread(account, context, locator.thread_id);
 }
 
 async function sendOrDraftGmailMessage(
@@ -1463,23 +1493,7 @@ export class GmailApiAdapter implements MailProviderAdapter {
     threadRef: string,
     context: ProviderContext,
   ): Promise<void> {
-    const locatorRow = context.db.findProviderLocator("thread", threadRef);
-    if (!locatorRow) {
-      throw new SurfaceError("cache_miss", `No provider locator exists for thread '${threadRef}'.`, {
-        account: account.name,
-        threadRef,
-      });
-    }
-
-    const locator = JSON.parse(locatorRow.locator_json) as { thread_id?: string | null };
-    if (!locator.thread_id) {
-      throw new SurfaceError("transport_error", `Thread '${threadRef}' is missing a Gmail thread id.`, {
-        account: account.name,
-        threadRef,
-      });
-    }
-
-    await fetchAndPersistGmailThread(account, context, locator.thread_id);
+    await refreshGmailThread(account, threadRef, context);
   }
 
   async readMessage(

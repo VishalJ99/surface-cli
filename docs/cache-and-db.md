@@ -40,6 +40,10 @@ SQLite should store enough information to resolve refs and power later commands:
   message-first results from that normalized state. It does not require a separate sent-message
   table in v1 because `messages` already stores sender, recipients, timestamps, body cache, and
   refs, while `thread_ref` preserves the path back to full conversation context.
+- `sent --thread <thread_ref>` should use the existing thread/message cache as the local filter
+  substrate after refreshing that provider thread when possible. No message-level sent table is
+  required because account-authored messages can be selected from normalized sender identity and
+  recipient metadata already stored on `messages`.
 - `sync-unread-state` should use the same provider fetch/persist path as `fetch-unread`, then
   reconcile local `messages.unread` and `threads.unread_count` only within its documented bounded
   comparison window unless `--rebaseline` is explicitly passed.

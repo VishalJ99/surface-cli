@@ -87,7 +87,10 @@ the bounded v1 command.
 `surface mail sent` is intentionally a provider adapter method because it is message-first while
 `search` and `fetchUnread` are thread-first. Providers should return newest sent messages up to the
 query limit, include stable `thread_ref` values on every result, and persist any fetched
-conversation/message state through the same normalized cache used by search/fetch.
+conversation/message state through the same normalized cache used by search/fetch. When
+`SentQuery.thread_ref` is present, providers should refresh that specific thread when possible and
+return account-authored sent messages from the normalized stored thread, optionally also applying
+the recipient filter.
 
 ## Normalization Rules
 

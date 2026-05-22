@@ -126,6 +126,7 @@ surface mail search --account personal_2 --text "has:attachment newer_than:30d" 
 ```bash
 surface mail sent --account uni
 surface mail sent --account uni --recipient person@example.com --limit 10
+surface mail sent --account uni --thread thr_01... --limit 10
 surface mail sent --account uni --session sess_01... --recipient person@example.com --limit 10
 surface mail sent --account personal_2 --limit 10
 ```
@@ -133,6 +134,9 @@ surface mail sent --account personal_2 --limit 10
 `sent` is message-first. Its default limit is the last 10 sent messages, not threads. Each returned
 message includes `message_ref` and `thread_ref`; use `surface mail thread get <thread_ref>
 --refresh` when you need the full conversation around a sent message.
+
+Use `--thread <thread_ref>` when you already know the conversation and need only the user's sent
+messages in that thread for style or consistency. `--thread` may be combined with `--recipient`.
 
 ### Watching Threads And Topics
 
