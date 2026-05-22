@@ -14,6 +14,8 @@ import type {
   SendMessageInput,
   SendResultEnvelope,
   SearchQuery,
+  SentMessageResult,
+  SentQuery,
 } from "../contracts/mail.js";
 import type { AccountPaths, SurfacePaths } from "../paths.js";
 import type { SurfaceDatabase } from "../state/database.js";
@@ -49,6 +51,11 @@ export interface MailProviderAdapter {
     query: FetchUnreadQuery,
     context: ProviderContext,
   ): Promise<NormalizedThreadRecord[]>;
+  fetchSent(
+    account: MailAccount,
+    query: SentQuery,
+    context: ProviderContext,
+  ): Promise<SentMessageResult[]>;
   refreshThread(
     account: MailAccount,
     threadRef: string,

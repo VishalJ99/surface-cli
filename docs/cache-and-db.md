@@ -36,6 +36,10 @@ SQLite should store enough information to resolve refs and power later commands:
 ## Cache Behavior
 
 - `search` and `fetch-unread` should upsert results into SQLite.
+- `sent` should upsert the provider conversations/messages it inspects into SQLite, then return
+  message-first results from that normalized state. It does not require a separate sent-message
+  table in v1 because `messages` already stores sender, recipients, timestamps, body cache, and
+  refs, while `thread_ref` preserves the path back to full conversation context.
 - `sync-unread-state` should use the same provider fetch/persist path as `fetch-unread`, then
   reconcile local `messages.unread` and `threads.unread_count` only within its documented bounded
   comparison window unless `--rebaseline` is explicitly passed.

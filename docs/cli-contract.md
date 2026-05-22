@@ -118,7 +118,8 @@ Warm session notes:
 
 - session ids are explicit and opt-in
 - v1 warm sessions are supported only for `outlook-web-playwright`
-- v1 session-aware commands are `search`, `fetch-unread`, `sync-unread-state`, `thread get --refresh`, and `read`
+- v1 session-aware commands are `search`, `fetch-unread`, `sent`, `sync-unread-state`,
+  `thread get --refresh`, and `read`
 - `read --mark-read` stays on the stateless path in v1
 
 Example session start result:
@@ -147,6 +148,7 @@ Example session start result:
 
 - `surface mail search --account <account> [--session <session_id>] [--text <query>] [--from <sender>] [--subject <subject>] [--mailbox <mailbox>] [--label <label>]...`
 - `surface mail fetch-unread --account <account> [--session <session_id>] ...`
+- `surface mail sent --account <account> [--session <session_id>] [--limit <limit>] [--recipient <email>]`
 - `surface mail sync-unread-state --account <account> [--limit <limit>] [--session <session_id>] [--rebaseline]`
 - `surface mail thread get <thread_ref> [--refresh] [--session <session_id>]`
 - `surface mail read <message_ref> [--refresh] [--session <session_id>] [--mark-read]`
@@ -400,6 +402,67 @@ Recommended example:
     }
   ],
   "threads": []
+}
+```
+
+### `surface mail sent`
+
+Return recent sent messages for an account. Unlike `search` and `fetch-unread`, this command is
+message-first because sent mail represents account-owner actions. `--limit` means sent messages,
+not threads, and defaults to 10. Results include both `message_ref` and `thread_ref` so agents can
+inspect the exact message or jump into the full conversation with `surface mail thread get`.
+
+`--recipient` narrows results to messages sent to a normalized recipient Surface can expose, usually
+To/Cc recipients. Providers may use native recipient search as a narrowing step, then post-filter
+against normalized recipients before returning JSON.
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "sent",
+  "generated_at": "2026-05-22T10:42:00Z",
+  "account": "work",
+  "query": {
+    "recipient": "recipient@example.com",
+    "limit": 10
+  },
+  "messages": [
+    {
+      "message_ref": "msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P",
+      "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
+      "source": {
+        "provider": "gmail",
+        "transport": "gmail-api"
+      },
+      "envelope": {
+        "subject": "Project update",
+        "from": {
+          "name": "Vishal Jain",
+          "email": "sender@example.com"
+        },
+        "to": [
+          {
+            "name": "Recipient",
+            "email": "recipient@example.com"
+          }
+        ],
+        "cc": [],
+        "sent_at": "2026-05-22T09:15:00Z",
+        "received_at": "2026-05-22T09:15:00Z",
+        "unread": false
+      },
+      "snippet": "Sharing the latest project update.",
+      "body": {
+        "text": "Sharing the latest project update.",
+        "truncated": false,
+        "cached": true,
+        "cached_bytes": 34
+      },
+      "attachments": []
+    }
+  ]
 }
 ```
 

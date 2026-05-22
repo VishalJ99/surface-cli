@@ -177,6 +177,16 @@ surface mail fetch-unread --account uni --limit 10
 surface mail sync-unread-state --account uni --limit 50
 ```
 
+List recent sent messages:
+
+```bash
+surface mail sent --account uni
+surface mail sent --account uni --recipient person@example.com --limit 10
+```
+
+`sent` is message-first: the default limit is the last 10 sent messages, and each result includes a
+stable `thread_ref` so agents can open the full conversation when needed.
+
 Search with structured filters:
 
 ```bash
@@ -200,6 +210,7 @@ to follow-up read commands:
 surface session start --account uni
 surface mail fetch-unread --account uni --session sess_01... --limit 10
 surface mail sync-unread-state --account uni --session sess_01... --limit 50
+surface mail sent --account uni --session sess_01... --limit 10
 surface mail search --account uni --session sess_01... --text "exam board" --limit 10
 surface session stop sess_01...
 ```
@@ -265,7 +276,7 @@ Surface v1 supports:
 - account add/list/remove
 - auth login/status/logout
 - account-owner identity for summaries
-- `search` and `fetch-unread`
+- `search`, `fetch-unread`, and message-first `sent`
 - bounded unread-state refresh with `sync-unread-state`
 - thread refresh and message read
 - attachment list/download

@@ -1,6 +1,6 @@
 ---
 name: surface-cli
-description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP or require admin setup, plus stable refs for unread fetch, structured search, thread refresh, message read, attachments, send or draft, archive, mark read or unread, and Outlook RSVP."
+description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP or require admin setup, plus stable refs for unread fetch, sent-message lookup, structured search, thread refresh, message read, attachments, send or draft, archive, mark read or unread, and Outlook RSVP."
 metadata:
   {
     "openclaw":
@@ -120,6 +120,19 @@ surface mail search --account uni --session sess_01... --from registrar@school.e
 surface mail search --account personal_2 --mailbox inbox --label unread --text "sale" --limit 10
 surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
 ```
+
+### List Sent Messages
+
+```bash
+surface mail sent --account uni
+surface mail sent --account uni --recipient person@example.com --limit 10
+surface mail sent --account uni --session sess_01... --recipient person@example.com --limit 10
+surface mail sent --account personal_2 --limit 10
+```
+
+`sent` is message-first. Its default limit is the last 10 sent messages, not threads. Each returned
+message includes `message_ref` and `thread_ref`; use `surface mail thread get <thread_ref>
+--refresh` when you need the full conversation around a sent message.
 
 ### Watching Threads And Topics
 

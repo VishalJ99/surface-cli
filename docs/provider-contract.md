@@ -24,6 +24,7 @@ Each provider implementation must support:
 - account auth lifecycle
 - search
 - fetch-unread
+- fetch sent messages
 - refresh thread
 - read message
 - send
@@ -52,6 +53,7 @@ interface MailProviderAdapter {
 
   search(account: MailAccount, query: SearchQuery): Promise<ThreadResult[]>;
   fetchUnread(account: MailAccount, query: FetchUnreadQuery): Promise<ThreadResult[]>;
+  fetchSent(account: MailAccount, query: SentQuery): Promise<SentMessageResult[]>;
   refreshThread(account: MailAccount, threadRef: string): Promise<void>;
   readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<ReadResultEnvelope>;
   sendMessage(account: MailAccount, input: SendMessageInput): Promise<SendResultEnvelope>;
@@ -81,6 +83,11 @@ The adapter returns normalized mail-domain objects, not provider-native payloads
 `surface mail sync-unread-state` is intentionally a CLI/cache operation layered on the existing
 `fetchUnread` adapter method. Providers do not need a separate full-history unread sync hook for
 the bounded v1 command.
+
+`surface mail sent` is intentionally a provider adapter method because it is message-first while
+`search` and `fetchUnread` are thread-first. Providers should return newest sent messages up to the
+query limit, include stable `thread_ref` values on every result, and persist any fetched
+conversation/message state through the same normalized cache used by search/fetch.
 
 ## Normalization Rules
 
@@ -158,6 +165,7 @@ Each provider should pass the same contract tests for:
 
 - search result schema
 - fetch-unread result schema
+- sent result schema, including `message_ref` and `thread_ref`
 - read behavior on cache hit and cache miss
 - attachment metadata shape
 - machine-readable error codes

@@ -100,6 +100,11 @@ export interface FetchUnreadQuery {
   unread_only: true;
 }
 
+export interface SentQuery {
+  recipient?: string;
+  limit: number;
+}
+
 export interface SearchResultEnvelope {
   schema_version: "1";
   command: "search" | "fetch-unread";
@@ -115,6 +120,20 @@ export interface SearchResultEnvelope {
     unread_only: boolean;
   };
   threads: ThreadResult[];
+}
+
+export interface SentMessageResult extends MessageResult {
+  thread_ref: string;
+  source: SourceInfo;
+}
+
+export interface SentResultEnvelope {
+  schema_version: "1";
+  command: "sent";
+  generated_at: string;
+  account: string;
+  query: SentQuery;
+  messages: SentMessageResult[];
 }
 
 export interface SyncUnreadStateResultEnvelope {
