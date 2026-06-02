@@ -16,7 +16,9 @@
     "gmail",
     "outlook",
     "automation",
-    "openclaw"
+    "openclaw",
+    "codex",
+    "claude-code"
   ],
   "type": "module",
   "bin": {
@@ -27,6 +29,7 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md"
   ],
   "scripts": {

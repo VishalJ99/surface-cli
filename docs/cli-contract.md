@@ -9,6 +9,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface account`
 - `surface auth`
 - `surface session`
+- `surface skill`
 - `surface mail`
 - `surface attachment`
 - `surface cache`
@@ -25,6 +26,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface auth login <account> [--remote-host <host>]`
 - `surface auth status [account]`
 - `surface auth logout <account>`
+- `surface skill install <codex|claude-code|all>`
 
 Account identity notes:
 
@@ -105,6 +107,33 @@ Example remote auth login result:
     "status": "authenticated",
     "detail": "Authenticated as you@example.com."
   }
+}
+```
+
+### Agent Skill Install
+
+- `surface skill install codex` copies the bundled Surface skill to
+  `~/.codex/skills/surface-cli/SKILL.md`
+- `surface skill install claude-code` copies the bundled Surface skill to
+  `~/.claude/skills/surface-cli/SKILL.md`
+- `surface skill install all` installs both copies
+- `surface skill install claude` is accepted as an alias for `claude-code`
+
+Example skill install result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "skill-install",
+  "target": "codex",
+  "installed": [
+    {
+      "agent": "codex",
+      "skill": "surface-cli",
+      "source": "/opt/homebrew/lib/node_modules/surface-cli/skills/surface-cli/SKILL.md",
+      "path": "/Users/example/.codex/skills/surface-cli/SKILL.md"
+    }
+  ]
 }
 ```
 

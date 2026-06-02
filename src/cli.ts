@@ -10,6 +10,11 @@ import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
 import { runRemoteAuthLogin } from "./lib/remote-auth.js";
 import { loadStoredThread, threadHasReadableCache } from "./lib/stored-mail.js";
+import {
+  expandSkillInstallTargets,
+  installSurfaceSkill,
+  parseSkillInstallTarget,
+} from "./lib/skill-install.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { resolveProviderAdapter } from "./providers/index.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
@@ -212,6 +217,25 @@ program
   .description("Multi-provider mail CLI for Surface.")
   .showHelpAfterError()
   .addOption(new Option("--config <path>", "Config file path").env("SURFACE_CONFIG_PATH"));
+
+const skillCommand = program.command("skill").description("Install Surface agent skills.");
+
+skillCommand
+  .command("install")
+  .argument("<target>", "Agent target: codex, claude-code, or all")
+  .action(async (targetValue: string) => {
+    const target = parseSkillInstallTarget(targetValue);
+    const installed = [];
+    for (const installTarget of expandSkillInstallTargets(target)) {
+      installed.push(await installSurfaceSkill(installTarget));
+    }
+    writeJson({
+      schema_version: "1",
+      command: "skill-install",
+      target,
+      installed,
+    });
+  });
 
 const accountCommand = program.command("account").description("Manage Surface accounts.");
 
