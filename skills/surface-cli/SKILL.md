@@ -48,6 +48,14 @@ surface account list
 surface auth status
 ```
 
+If the user asks to install the Surface skill for another agent on the same machine, use:
+
+```bash
+surface skill install codex
+surface skill install claude-code
+surface skill install all
+```
+
 ## Account Setup
 
 Add an account:

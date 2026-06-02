@@ -39,7 +39,9 @@ npm install -g surface-cli
 surface --help
 ```
 
-Then install the skill for the agent you use.
+Then install the skill for the agent you use. The npm package includes the
+matching Surface skill file, and `surface skill install` copies it into the
+agent's user skill directory.
 
 ### OpenClaw
 
@@ -55,12 +57,11 @@ If `openclaw skills check` reports the `surface` binary as missing, run
 
 ### Codex
 
-Codex reads user skills from `~/.agents/skills`:
+Codex reads user skills from `~/.codex/skills`:
 
 ```bash
-mkdir -p ~/.agents/skills/surface-cli
-curl -fsSL https://raw.githubusercontent.com/VishalJ99/surface-cli/main/skills/surface-cli/SKILL.md \
-  -o ~/.agents/skills/surface-cli/SKILL.md
+npm install -g surface-cli
+surface skill install codex
 ```
 
 Restart Codex if the skill does not appear immediately. Codex can invoke it
@@ -71,13 +72,19 @@ automatically from the description, or you can mention `$surface-cli`.
 Claude Code reads personal skills from `~/.claude/skills`:
 
 ```bash
-mkdir -p ~/.claude/skills/surface-cli
-curl -fsSL https://raw.githubusercontent.com/VishalJ99/surface-cli/main/skills/surface-cli/SKILL.md \
-  -o ~/.claude/skills/surface-cli/SKILL.md
+npm install -g surface-cli
+surface skill install claude-code
 ```
 
 Claude Code exposes the skill as `/surface-cli` and may also load it
 automatically when the task matches the skill description.
+
+To install both user skills on the same machine:
+
+```bash
+npm install -g surface-cli
+surface skill install all
+```
 
 ## Setup
 
