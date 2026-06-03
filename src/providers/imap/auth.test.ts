@@ -33,3 +33,20 @@ test("failing password-command errors are redacted", () => {
   assert.doesNotMatch(thrown.message, /process\.exit/);
   assert.doesNotMatch(thrown.message, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
+
+test("direct password source returns the password flag value", () => {
+  assert.equal(
+    imapAuthTestHooks.resolvePassword({ password: "mailbox-secret" } as AuthLoginOptions, account()),
+    "mailbox-secret",
+  );
+});
+
+test("password sources are mutually exclusive", () => {
+  assert.throws(
+    () => imapAuthTestHooks.resolvePassword(
+      { password: "mailbox-secret", passwordEnv: "SURFACE_GMX_PASSWORD" } as AuthLoginOptions,
+      account(),
+    ),
+    /exactly one of --password, --password-env, --password-file, or --password-command/,
+  );
+});

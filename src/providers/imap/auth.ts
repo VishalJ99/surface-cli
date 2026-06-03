@@ -113,6 +113,7 @@ function readPasswordFromCommand(command: string, account: MailAccount): string 
 
 function resolvePassword(options: AuthLoginOptions, account: MailAccount): string {
   const sources = [
+    options.password !== undefined ? "password" : null,
     options.passwordEnv ? "env" : null,
     options.passwordFile ? "file" : null,
     options.passwordCommand ? "command" : null,
@@ -121,11 +122,14 @@ function resolvePassword(options: AuthLoginOptions, account: MailAccount): strin
   if (sources.length !== 1) {
     throw new SurfaceError(
       "invalid_argument",
-      "IMAP/SMTP auth login requires exactly one of --password-env, --password-file, or --password-command.",
+      "IMAP/SMTP auth login requires exactly one of --password, --password-env, --password-file, or --password-command.",
       { account: account.name },
     );
   }
 
+  if (options.password !== undefined) {
+    return options.password.replace(/[\r\n]+$/g, "");
+  }
   if (options.passwordEnv) {
     return readPasswordFromEnv(options.passwordEnv, account);
   }

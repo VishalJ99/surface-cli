@@ -63,6 +63,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeOptionalSecret(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function normalizeOptionalImapSmtpSecurity(value: unknown): ImapSmtpSecurityMode | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
@@ -386,6 +390,7 @@ authCommand
   .addOption(new Option("--smtp-port <port>", "SMTP server port for imap-smtp accounts").argParser(positiveInt))
   .option("--smtp-security <mode>", "SMTP security mode: tls, starttls, or none")
   .option("--username <username>", "Mailbox username for imap-smtp accounts")
+  .option("--password <password>", "Direct mailbox or app password for imap-smtp accounts (less safe)")
   .option("--password-env <name>", "Environment variable containing the mailbox or app password")
   .option("--password-file <path>", "File containing the mailbox or app password")
   .option("--password-command <command>", "Command that prints the mailbox or app password to stdout")
@@ -409,6 +414,7 @@ authCommand
           smtpPort: options.smtpPort,
           smtpSecurity: normalizeOptionalImapSmtpSecurity(options.smtpSecurity),
           username: normalizeOptionalString(options.username),
+          password: normalizeOptionalSecret(options.password),
           passwordEnv: normalizeOptionalString(options.passwordEnv),
           passwordFile: normalizeOptionalString(options.passwordFile),
           passwordCommand: normalizeOptionalString(options.passwordCommand),

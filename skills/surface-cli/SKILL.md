@@ -83,16 +83,18 @@ surface auth login gmx \
   --imap-host imap.gmx.com --imap-port 993 --imap-security tls \
   --smtp-host mail.gmx.com --smtp-port 587 --smtp-security starttls \
   --username you@gmx.com \
-  --password-command "security find-generic-password -w -s surface-gmx"
+  --password-env SURFACE_GMX_PASSWORD
 ```
 
 For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
 provider web settings before logging in. Generic IMAP login does not need a
 Google Cloud project, OAuth client JSON, Microsoft Graph app registration, or a
 browser session. It does need the provider's IMAP/SMTP settings and a mailbox or
-app password from a local secret source such as `--password-command`,
-`--password-env`, or `--password-file`. Do not ask the user to paste mailbox
-passwords into chat or store them in the repo.
+app password. `--password <password>` is supported and treats the flag value as
+the password directly, but prefer `--password-env`, `--password-file`, or
+`--password-command` because direct CLI passwords can leak through shell
+history, process listings, terminal logs, or agent transcripts. Do not ask the
+user to paste mailbox passwords into chat or store them in the repo.
 
 Local policy lives in:
 
