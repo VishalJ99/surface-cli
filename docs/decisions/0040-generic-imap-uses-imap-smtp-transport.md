@@ -25,6 +25,9 @@ stored in the public repo, command docs, or `config.toml`.
 
 IMAP locators use the existing provider locator table. Thread and message identity is based on the
 mailbox plus IMAP UID/UIDVALIDITY, with RFC message IDs used as additional metadata when present.
+Generic IMAP does not synthesize cross-folder conversation threads in v1. Replies and reply-all
+messages are stored and returned using the resolved Sent/Drafts refs for the created message, and
+`in_reply_to_message_ref` links back to the source message.
 
 ## Consequences
 
@@ -32,4 +35,6 @@ mailbox plus IMAP UID/UIDVALIDITY, with RFC message IDs used as additional metad
 - Existing Gmail and Outlook account behavior remains unchanged.
 - The existing SQLite schema remains sufficient because provider locators already store
   transport-specific JSON.
+- Generic IMAP reply results can differ from Gmail/Outlook reply results when those providers expose
+  native cross-folder conversation IDs.
 - RSVP remains unsupported for generic IMAP until calendar invite execution is explicitly designed.

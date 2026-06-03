@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,12 +17,14 @@ import {
   type EmailAddress,
   type ParsedMail,
 } from "mailparser";
+import { createTransport, type SendMailOptions } from "nodemailer";
 
 import type { MailAccount } from "../../contracts/account.js";
 import type {
   ArchiveResultEnvelope,
   AttachmentDownloadEnvelope,
   AttachmentListEnvelope,
+  ComposeRecipients,
   FetchUnreadQuery,
   ForwardInput,
   MarkMessagesResultEnvelope,
@@ -42,9 +45,14 @@ import type {
   SentQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
-import { SurfaceError, notImplemented } from "../../lib/errors.js";
+import { SurfaceError } from "../../lib/errors.js";
 import { toPublicSentMessage } from "../../lib/public-mail.js";
-import { messageMatchesRecipient, normalizeComparableEmail, sentMessagesFromStoredThread } from "../../lib/sent-mail.js";
+import {
+  accountIdentityEmails,
+  messageMatchesRecipient,
+  normalizeComparableEmail,
+  sentMessagesFromStoredThread,
+} from "../../lib/sent-mail.js";
 import { assertWriteAllowed } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
@@ -137,6 +145,36 @@ async function withImapClient<T>(
     } catch {
       client.close();
     }
+  }
+}
+
+async function withSmtpTransport<T>(
+  account: MailAccount,
+  context: ProviderContext,
+  work: (transport: ReturnType<typeof createTransport>) => Promise<T>,
+): Promise<T> {
+  const state = readImapSmtpAuthState(account, context);
+  const transport = createTransport({
+    host: state.smtp.host,
+    port: state.smtp.port,
+    secure: state.smtp.security === "tls",
+    requireTLS: state.smtp.security === "starttls",
+    ignoreTLS: state.smtp.security === "none",
+    auth: {
+      user: state.username,
+      pass: state.password,
+    },
+    connectionTimeout: context.config.providerTimeoutMs,
+    greetingTimeout: context.config.providerTimeoutMs,
+    socketTimeout: context.config.providerTimeoutMs,
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  });
+
+  try {
+    return await work(transport);
+  } finally {
+    transport.close();
   }
 }
 
@@ -608,6 +646,149 @@ function buildMarkMessagesEnvelope(
     account: account.name,
     source: sourceInfo(account),
     updated,
+  };
+}
+
+function participantFromEmail(email: string): MessageParticipant {
+  return {
+    name: email,
+    email,
+  };
+}
+
+function recipientsFromInput(input: { to: string[]; cc: string[]; bcc: string[] }): ComposeRecipients {
+  return {
+    to: input.to.map(participantFromEmail),
+    cc: input.cc.map(participantFromEmail),
+    bcc: input.bcc.map(participantFromEmail),
+  };
+}
+
+function normalizeEmailList(values: Array<string | null | undefined>): string[] {
+  const deduped = new Set<string>();
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized) {
+      continue;
+    }
+    deduped.add(normalized);
+  }
+  return [...deduped];
+}
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function prefixSubject(subject: string, prefix: "Re" | "Fwd"): string {
+  const normalized = subject.trim();
+  if (!normalized) {
+    return `${prefix}:`;
+  }
+  const matcher = prefix === "Re" ? /^re:\s/i : /^(fwd|fw):\s/i;
+  return matcher.test(normalized) ? normalized : `${prefix}: ${normalized}`;
+}
+
+function quoteLines(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function buildReplyBody(inputBody: string, stored: StoredMessageRecord): string {
+  const parsed = parseStoredMessage(stored);
+  const originalBody = parsed.body.text.trim();
+  const originalFrom = parsed.envelope.from?.email ?? parsed.envelope.from?.name ?? "unknown sender";
+  const originalDate = parsed.envelope.sent_at ?? parsed.envelope.received_at ?? "unknown time";
+  if (!originalBody) {
+    return inputBody;
+  }
+  return `${inputBody}\n\nOn ${originalDate}, ${originalFrom} wrote:\n${quoteLines(originalBody)}`;
+}
+
+function buildForwardBody(inputBody: string, stored: StoredMessageRecord): string {
+  const parsed = parseStoredMessage(stored);
+  const originalBody = parsed.body.text.trim();
+  const lines = [
+    inputBody,
+    "",
+    "---------- Forwarded message ---------",
+    `From: ${parsed.envelope.from?.email ?? parsed.envelope.from?.name ?? ""}`,
+    `Date: ${parsed.envelope.sent_at ?? parsed.envelope.received_at ?? ""}`,
+    `Subject: ${parsed.envelope.subject ?? ""}`,
+    `To: ${parsed.envelope.to.map((mailbox) => mailbox.email).join(", ")}`,
+  ];
+  if (parsed.envelope.cc.length > 0) {
+    lines.push(`Cc: ${parsed.envelope.cc.map((mailbox) => mailbox.email).join(", ")}`);
+  }
+  lines.push("", originalBody);
+  return lines.join("\n").trim();
+}
+
+function makeSmtpMessageId(account: MailAccount): string {
+  const domain = account.email.split("@")[1]?.trim() || "surface.local";
+  return `<surface-${Date.now()}-${randomUUID()}@${domain}>`;
+}
+
+function rfc2822Date(value: Date = new Date()): string {
+  return value.toUTCString().replace("GMT", "+0000");
+}
+
+function buildRawMimeMessage(input: {
+  from: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+  messageId: string;
+  date?: string;
+  inReplyTo?: string | null | undefined;
+  includeBccHeader?: boolean;
+  references?: string | null | undefined;
+}): string {
+  const lines = [
+    `From: ${sanitizeHeaderValue(input.from)}`,
+    ...(input.to.length > 0 ? [`To: ${input.to.map(sanitizeHeaderValue).join(", ")}`] : []),
+    ...(input.cc.length > 0 ? [`Cc: ${input.cc.map(sanitizeHeaderValue).join(", ")}`] : []),
+    ...(input.includeBccHeader && input.bcc.length > 0 ? [`Bcc: ${input.bcc.map(sanitizeHeaderValue).join(", ")}`] : []),
+    `Subject: ${sanitizeHeaderValue(input.subject)}`,
+    `Message-ID: ${sanitizeHeaderValue(input.messageId)}`,
+    `Date: ${sanitizeHeaderValue(input.date ?? rfc2822Date())}`,
+    ...(input.inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(input.inReplyTo)}`] : []),
+    ...(input.references ? [`References: ${sanitizeHeaderValue(input.references)}`] : []),
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    input.body.replace(/\r\n/g, "\n"),
+    "",
+  ];
+  return lines.join("\r\n");
+}
+
+function buildSendEnvelope(
+  account: MailAccount,
+  command: SendResultEnvelope["command"],
+  status: SendResultEnvelope["status"],
+  subject: string,
+  recipients: ComposeRecipients,
+  result: { thread_ref: string | null; message_ref: string | null },
+  inReplyToMessageRef: string | null,
+): SendResultEnvelope {
+  return {
+    schema_version: "1",
+    command,
+    account: account.name,
+    source: sourceInfo(account),
+    status,
+    subject,
+    recipients,
+    thread_ref: result.thread_ref,
+    message_ref: result.message_ref,
+    in_reply_to_message_ref: inReplyToMessageRef,
   };
 }
 
@@ -1122,6 +1303,255 @@ async function fetchSentMessages(
   });
 }
 
+function mailboxExists(mailboxes: ListResponse[], path: string): boolean {
+  return mailboxes.some((mailbox) => mailbox.path === path);
+}
+
+async function findAppendedThreadByMessageId(
+  account: MailAccount,
+  client: ImapFlow,
+  mailboxPath: string,
+  messageId: string,
+): Promise<NormalizedThreadRecord | null> {
+  await client.mailboxOpen(mailboxPath);
+  const matches = await client.search({ header: { "message-id": messageId } }, { uid: true });
+  const uids = Array.isArray(matches) ? matches.slice(-1).reverse() : [];
+  const [thread] = await fetchUidThreads(account, client, mailboxPath, uids);
+  return thread ?? null;
+}
+
+function persistMailboxThreadRefs(
+  account: MailAccount,
+  context: ProviderContext,
+  thread: NormalizedThreadRecord | null,
+): { thread_ref: string | null; message_ref: string | null } | null {
+  if (!thread) {
+    return null;
+  }
+  const [persisted] = persistThreads(account, context, [thread]);
+  return persisted
+    ? {
+      thread_ref: persisted.thread_ref,
+      message_ref: persisted.messages[0]?.message_ref ?? null,
+    }
+    : null;
+}
+
+async function appendMimeToMailbox(
+  account: MailAccount,
+  context: ProviderContext,
+  mailboxAlias: "sent" | "drafts",
+  rawMime: string,
+  messageId: string,
+  flags: string[],
+): Promise<{ thread_ref: string | null; message_ref: string | null } | null> {
+  return withImapClient(account, context, async (client) => {
+    const mailboxes = await client.list();
+    const mailboxPath = resolveMailboxPath(mailboxes, mailboxAlias);
+    if (!mailboxExists(mailboxes, mailboxPath)) {
+      throw new SurfaceError("unsupported", `This IMAP account does not expose a ${mailboxAlias} mailbox.`, {
+        account: account.name,
+      });
+    }
+
+    const appended = await client.append(mailboxPath, Buffer.from(rawMime, "utf8"), flags);
+    let thread: NormalizedThreadRecord | null = null;
+    if (appended && typeof appended.uid === "number") {
+      const [fetched] = await fetchUidThreads(account, client, mailboxPath, [appended.uid]);
+      thread = fetched ?? null;
+    }
+    thread ??= await findAppendedThreadByMessageId(account, client, mailboxPath, messageId);
+
+    return persistMailboxThreadRefs(account, context, thread);
+  });
+}
+
+async function findMailboxMessageRefsByMessageId(
+  account: MailAccount,
+  context: ProviderContext,
+  mailboxAlias: "sent" | "drafts",
+  messageId: string,
+  options: {
+    attempts?: number;
+    delayMs?: number;
+  } = {},
+): Promise<{ thread_ref: string | null; message_ref: string | null } | null> {
+  const attempts = Math.max(1, options.attempts ?? 1);
+  const delayMs = Math.max(0, options.delayMs ?? 0);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const refs = await withImapClient(account, context, async (client) => {
+      const mailboxes = await client.list();
+      const mailboxPath = resolveMailboxPath(mailboxes, mailboxAlias);
+      if (!mailboxExists(mailboxes, mailboxPath)) {
+        return null;
+      }
+      return persistMailboxThreadRefs(
+        account,
+        context,
+        await findAppendedThreadByMessageId(account, client, mailboxPath, messageId),
+      );
+    });
+    if (refs || attempt === attempts - 1) {
+      return refs;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return null;
+}
+
+const DRAFT_APPEND_FLAGS = ["\\Draft", "\\Seen"];
+const SENT_APPEND_FLAGS = ["\\Seen"];
+
+function buildComposeRaw(input: {
+  account: MailAccount;
+  recipients: { to: string[]; cc: string[]; bcc: string[] };
+  subject: string;
+  body: string;
+  messageId: string;
+  inReplyTo?: string | null | undefined;
+  references?: string | null | undefined;
+}): { deliveryRaw: string; storedRaw: string } {
+  const base = {
+    from: input.account.email,
+    to: input.recipients.to,
+    cc: input.recipients.cc,
+    bcc: input.recipients.bcc,
+    subject: input.subject,
+    body: input.body,
+    messageId: input.messageId,
+    inReplyTo: input.inReplyTo,
+    references: input.references,
+  };
+  return {
+    deliveryRaw: buildRawMimeMessage({ ...base, includeBccHeader: false }),
+    storedRaw: buildRawMimeMessage({ ...base, includeBccHeader: true }),
+  };
+}
+
+async function sendRawSmtpMessage(
+  account: MailAccount,
+  context: ProviderContext,
+  rawMime: string,
+  recipients: { to: string[]; cc: string[]; bcc: string[] },
+): Promise<void> {
+  const envelopeRecipients = [...recipients.to, ...recipients.cc, ...recipients.bcc];
+  const message: SendMailOptions = {
+    raw: rawMime,
+    envelope: {
+      from: account.email,
+      to: envelopeRecipients,
+    },
+  };
+  await withSmtpTransport(account, context, async (transport) => {
+    await transport.sendMail(message);
+  });
+}
+
+async function sendOrDraftImapSmtpMessage(input: {
+  account: MailAccount;
+  context: ProviderContext;
+  recipients: { to: string[]; cc: string[]; bcc: string[] };
+  subject: string;
+  body: string;
+  draft: boolean;
+  inReplyTo?: string | null | undefined;
+  references?: string | null | undefined;
+}): Promise<{ status: SendResultEnvelope["status"]; refs: { thread_ref: string | null; message_ref: string | null } }> {
+  const messageId = makeSmtpMessageId(input.account);
+  const raw = buildComposeRaw({
+    account: input.account,
+    recipients: input.recipients,
+    subject: input.subject,
+    body: input.body,
+    messageId,
+    inReplyTo: input.inReplyTo,
+    references: input.references,
+  });
+
+  if (input.draft) {
+    const refs = await appendMimeToMailbox(
+      input.account,
+      input.context,
+      "drafts",
+      raw.storedRaw,
+      messageId,
+      DRAFT_APPEND_FLAGS,
+    );
+    if (!refs) {
+      throw new SurfaceError("transport_error", "IMAP draft append succeeded but the appended draft could not be resolved.", {
+        account: input.account.name,
+      });
+    }
+    return { status: "drafted", refs };
+  }
+
+  await sendRawSmtpMessage(input.account, input.context, raw.deliveryRaw, input.recipients);
+  const providerFiledRefs = await findMailboxMessageRefsByMessageId(
+    input.account,
+    input.context,
+    "sent",
+    messageId,
+    {
+      attempts: 3,
+      delayMs: 1_000,
+    },
+  ).catch(() => null);
+  const refs = providerFiledRefs ?? await appendMimeToMailbox(
+    input.account,
+    input.context,
+    "sent",
+    raw.storedRaw,
+    messageId,
+    SENT_APPEND_FLAGS,
+  ).catch(() => null);
+  return { status: "sent", refs: refs ?? { thread_ref: null, message_ref: null } };
+}
+
+async function resolveComposeTarget(
+  account: MailAccount,
+  context: ProviderContext,
+  messageRef: string,
+): Promise<{
+  stored: StoredMessageRecord;
+  parsed: ParsedMail;
+  messageId: string | null;
+  references: string | null;
+}> {
+  const stored = requireMessageForAccount(account, messageRef, context);
+  const locatorRow = context.db.findProviderLocator("message", messageRef);
+  if (!locatorRow) {
+    throw new SurfaceError("cache_miss", `No provider locator exists for message '${messageRef}'.`, {
+      account: account.name,
+      messageRef,
+      threadRef: stored.thread_ref,
+    });
+  }
+  const locator = parseMessageLocator(locatorRow.locator_json);
+  const parsed = await simpleParser(await readMessageSource(account, context, locator));
+  return {
+    stored,
+    parsed,
+    messageId: parsed.messageId ?? locator.message_id,
+    references: referencesToString(parsed.references) ?? locator.references,
+  };
+}
+
+function emailsFromAddressObject(value: AddressObject | AddressObject[] | undefined): string[] {
+  return addressesFromObject(value)
+    .map((address) => address.email)
+    .filter(Boolean);
+}
+
+function withoutAccountEmails(emails: string[], selfEmails: Set<string>): string[] {
+  return emails.filter((email) => !selfEmails.has(normalizeComparableEmail(email)));
+}
+
+function replyReferences(target: { messageId: string | null; references: string | null }): string | null {
+  return target.references
+    ? `${target.references}${target.messageId ? ` ${target.messageId}` : ""}`.trim()
+    : target.messageId;
+}
+
 function sanitizeAttachmentFilename(filename: string): string {
   const sanitized = filename.replace(/[\\/:*?"<>|\u0000-\u001F]/gu, "_").trim();
   return sanitized || "attachment";
@@ -1212,9 +1642,13 @@ async function mutateSeenFlag(
 
 export const imapAdapterTestHooks = {
   archivedThreadMatchesStoredMessage,
+  buildComposeRaw,
   buildSentSearch,
+  draftAppendFlags: DRAFT_APPEND_FLAGS,
   filterSentMessagesForQuery,
+  replyReferences,
   resolveMailboxPath,
+  sentAppendFlags: SENT_APPEND_FLAGS,
 };
 
 export class ImapSmtpAdapter implements MailProviderAdapter {
@@ -1413,37 +1847,214 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
 
   async sendMessage(
     account: MailAccount,
-    _input: SendMessageInput,
-    _context: ProviderContext,
+    input: SendMessageInput,
+    context: ProviderContext,
   ): Promise<SendResultEnvelope> {
-    notImplemented("IMAP/SMTP send is not implemented yet.", account.name);
+    const recipients = {
+      to: normalizeEmailList(input.to),
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+    };
+    const subject = input.subject.trim();
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("invalid_argument", "IMAP/SMTP send requires at least one --to recipient.", {
+        account: account.name,
+      });
+    }
+    if (!subject) {
+      throw new SurfaceError("invalid_argument", "IMAP/SMTP send requires a non-empty --subject.", {
+        account: account.name,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const result = await sendOrDraftImapSmtpMessage({
+      account,
+      context,
+      recipients,
+      subject,
+      body: input.body,
+      draft: input.draft,
+    });
+
+    return buildSendEnvelope(
+      account,
+      "send",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      null,
+    );
   }
 
   async reply(
     account: MailAccount,
     messageRef: string,
-    _input: ReplyInput,
-    _context: ProviderContext,
+    input: ReplyInput,
+    context: ProviderContext,
   ): Promise<SendResultEnvelope> {
-    notImplemented(`IMAP/SMTP reply is not implemented yet for '${messageRef}'.`, account.name);
+    const target = await resolveComposeTarget(account, context, messageRef);
+    const selfEmails = accountIdentityEmails(account, context);
+    const replyTo = emailsFromAddressObject(target.parsed.replyTo);
+    const from = emailsFromAddressObject(target.parsed.from);
+    let to = normalizeEmailList(withoutAccountEmails([...replyTo, ...from], selfEmails));
+    if (to.length === 0) {
+      to = normalizeEmailList(withoutAccountEmails(emailsFromAddressObject(target.parsed.to), selfEmails));
+    }
+    const recipients = {
+      to,
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+    };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose a reply target.`, {
+        account: account.name,
+        messageRef,
+        threadRef: target.stored.thread_ref,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const subject = prefixSubject(target.stored.subject ?? target.parsed.subject ?? "", "Re");
+    const result = await sendOrDraftImapSmtpMessage({
+      account,
+      context,
+      recipients,
+      subject,
+      body: buildReplyBody(input.body, target.stored),
+      draft: input.draft,
+      inReplyTo: target.messageId,
+      references: replyReferences(target),
+    });
+
+    return buildSendEnvelope(
+      account,
+      "reply",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      messageRef,
+    );
   }
 
   async replyAll(
     account: MailAccount,
     messageRef: string,
-    _input: ReplyInput,
-    _context: ProviderContext,
+    input: ReplyInput,
+    context: ProviderContext,
   ): Promise<SendResultEnvelope> {
-    notImplemented(`IMAP/SMTP reply-all is not implemented yet for '${messageRef}'.`, account.name);
+    const target = await resolveComposeTarget(account, context, messageRef);
+    const selfEmails = accountIdentityEmails(account, context);
+    const replyTo = emailsFromAddressObject(target.parsed.replyTo);
+    const from = emailsFromAddressObject(target.parsed.from);
+    const originalTo = emailsFromAddressObject(target.parsed.to);
+    const originalCc = emailsFromAddressObject(target.parsed.cc);
+
+    let to = normalizeEmailList(withoutAccountEmails([...replyTo, ...from], selfEmails));
+    if (to.length === 0) {
+      to = normalizeEmailList(withoutAccountEmails(originalTo, selfEmails));
+    }
+    if (to.length === 0) {
+      to = normalizeEmailList(from);
+    }
+
+    const toComparable = new Set(to.map(normalizeComparableEmail));
+    const cc = normalizeEmailList([
+      ...withoutAccountEmails(originalTo, selfEmails).filter((email) => !toComparable.has(normalizeComparableEmail(email))),
+      ...withoutAccountEmails(originalCc, selfEmails).filter((email) => !toComparable.has(normalizeComparableEmail(email))),
+      ...input.cc,
+    ]);
+    const recipients = {
+      to,
+      cc,
+      bcc: normalizeEmailList(input.bcc),
+    };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose reply-all recipients.`, {
+        account: account.name,
+        messageRef,
+        threadRef: target.stored.thread_ref,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const subject = prefixSubject(target.stored.subject ?? target.parsed.subject ?? "", "Re");
+    const result = await sendOrDraftImapSmtpMessage({
+      account,
+      context,
+      recipients,
+      subject,
+      body: buildReplyBody(input.body, target.stored),
+      draft: input.draft,
+      inReplyTo: target.messageId,
+      references: replyReferences(target),
+    });
+
+    return buildSendEnvelope(
+      account,
+      "reply-all",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      messageRef,
+    );
   }
 
   async forward(
     account: MailAccount,
     messageRef: string,
-    _input: ForwardInput,
-    _context: ProviderContext,
+    input: ForwardInput,
+    context: ProviderContext,
   ): Promise<SendResultEnvelope> {
-    notImplemented(`IMAP/SMTP forward is not implemented yet for '${messageRef}'.`, account.name);
+    const target = await resolveComposeTarget(account, context, messageRef);
+    const recipients = {
+      to: normalizeEmailList(input.to),
+      cc: normalizeEmailList(input.cc),
+      bcc: normalizeEmailList(input.bcc),
+    };
+    if (recipients.to.length === 0) {
+      throw new SurfaceError("invalid_argument", "IMAP/SMTP forward requires at least one --to recipient.", {
+        account: account.name,
+        messageRef,
+        threadRef: target.stored.thread_ref,
+      });
+    }
+
+    assertWriteAllowed(context.config, account, recipients, {
+      disposition: input.draft ? "draft" : "send",
+    });
+
+    const subject = prefixSubject(target.stored.subject ?? target.parsed.subject ?? "", "Fwd");
+    const result = await sendOrDraftImapSmtpMessage({
+      account,
+      context,
+      recipients,
+      subject,
+      body: buildForwardBody(input.body, target.stored),
+      draft: input.draft,
+    });
+
+    return buildSendEnvelope(
+      account,
+      "forward",
+      result.status,
+      subject,
+      recipientsFromInput(recipients),
+      result.refs,
+      messageRef,
+    );
   }
 
   async archive(

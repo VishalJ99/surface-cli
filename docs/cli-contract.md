@@ -109,17 +109,27 @@ IMAP/SMTP auth notes:
 Example GMX-style IMAP/SMTP login:
 
 ```bash
-surface account add gmx_test --provider imap --email you@gmx.net
+surface account add gmx_test --provider imap --email you@gmx.com
 surface auth login gmx_test \
-  --imap-host imap.gmx.net \
+  --imap-host imap.gmx.com \
   --imap-port 993 \
   --imap-security tls \
-  --smtp-host mail.gmx.net \
+  --smtp-host mail.gmx.com \
   --smtp-port 587 \
   --smtp-security starttls \
-  --username you@gmx.net \
+  --username you@gmx.com \
   --password-command "security find-generic-password -w -s surface-gmx-test"
 ```
+
+Generic IMAP/SMTP threading notes:
+
+- IMAP does not expose a provider conversation ID that reliably spans folders such as `INBOX` and
+  `Sent`.
+- Surface does not synthesize cross-folder conversations for generic IMAP in v1. A reply or
+  reply-all result returns the created Sent/Drafts `thread_ref` and `message_ref` when those refs can
+  be resolved, while `in_reply_to_message_ref` links back to the source message.
+- Gmail and Outlook may return the original provider conversation thread for replies because those
+  providers expose a native cross-folder conversation model.
 
 Remote auth login returns the normal `auth-login` envelope plus:
 

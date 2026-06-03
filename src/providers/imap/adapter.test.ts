@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { ListResponse } from "imapflow";
 
+import type { MailAccount } from "../../contracts/account.js";
 import type { SentMessageResult } from "../../contracts/mail.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 import { imapAdapterTestHooks } from "./adapter.js";
@@ -49,6 +50,18 @@ function sentMessage(input: {
       cached_bytes: 0,
     },
     attachments: [],
+  };
+}
+
+function account(): MailAccount {
+  return {
+    account_id: "acc_imap",
+    name: "imap",
+    provider: "imap",
+    transport: "imap-smtp",
+    email: "surface@example.com",
+    created_at: "2026-06-03T12:00:00.000Z",
+    updated_at: "2026-06-03T12:00:00.000Z",
   };
 }
 
@@ -115,6 +128,68 @@ test("filterSentMessagesForQuery keeps exact normalized To and Cc recipient matc
       .filterSentMessagesForQuery(messages, { recipient: "recipient@example.com", limit: 10 })
       .map((message) => message.message_ref),
     ["msg_to", "msg_cc"],
+  );
+});
+
+test("buildComposeRaw hides Bcc from delivery MIME while preserving it for stored copies", () => {
+  const raw = imapAdapterTestHooks.buildComposeRaw({
+    account: account(),
+    recipients: {
+      to: ["to@example.com"],
+      cc: ["cc@example.com"],
+      bcc: ["hidden@example.com"],
+    },
+    subject: "Surface probe",
+    body: "Hello",
+    messageId: "<surface-test@example.com>",
+  });
+
+  assert.match(raw.deliveryRaw, /^To: to@example\.com/m);
+  assert.match(raw.deliveryRaw, /^Cc: cc@example\.com/m);
+  assert.match(raw.deliveryRaw, /^Date: /m);
+  assert.doesNotMatch(raw.deliveryRaw, /^Bcc:/m);
+  assert.match(raw.storedRaw, /^Date: /m);
+  assert.match(raw.storedRaw, /^Bcc: hidden@example\.com/m);
+});
+
+test("buildComposeRaw neutralizes bare CR and LF header injection", () => {
+  const raw = imapAdapterTestHooks.buildComposeRaw({
+    account: account(),
+    recipients: {
+      to: ["to@example.com\rBcc: injected@example.com"],
+      cc: [],
+      bcc: [],
+    },
+    subject: "Surface\rBcc: injected@example.com\nCc: injected@example.com",
+    body: "Hello",
+    messageId: "<surface-test@example.com>",
+  });
+
+  assert.match(raw.deliveryRaw, /^To: to@example\.com Bcc: injected@example\.com/m);
+  assert.match(raw.deliveryRaw, /^Subject: Surface Bcc: injected@example\.com Cc: injected@example\.com/m);
+  assert.doesNotMatch(raw.deliveryRaw, /^Bcc: injected@example\.com/m);
+  assert.doesNotMatch(raw.deliveryRaw, /^Cc: injected@example\.com/m);
+});
+
+test("IMAP drafts append as seen drafts and sent appends as seen", () => {
+  assert.deepEqual(imapAdapterTestHooks.draftAppendFlags, ["\\Draft", "\\Seen"]);
+  assert.deepEqual(imapAdapterTestHooks.sentAppendFlags, ["\\Seen"]);
+});
+
+test("replyReferences appends the original Message-ID to existing references", () => {
+  assert.equal(
+    imapAdapterTestHooks.replyReferences({
+      messageId: "<latest@example.com>",
+      references: "<root@example.com>",
+    }),
+    "<root@example.com> <latest@example.com>",
+  );
+  assert.equal(
+    imapAdapterTestHooks.replyReferences({
+      messageId: "<latest@example.com>",
+      references: null,
+    }),
+    "<latest@example.com>",
   );
 });
 
