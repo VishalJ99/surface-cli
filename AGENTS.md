@@ -1,5 +1,30 @@
 # AGENTS.md
 
+## User Environment
+
+This Codex session runs headlessly by default. Browser or desktop windows may exist but report
+zero-sized or unshareable bounds until the display is explicitly woken.
+
+When a task needs a headful browser or visible desktop UI, wake the screen first and use local
+Peekaboo capture/input with `--no-remote`. The known working pattern is:
+
+```bash
+/usr/bin/caffeinate -d -u -t 20 >/dev/null 2>&1 & sleep 2
+/opt/homebrew/bin/peekaboo see --mode screen --screen-index 0 --no-remote --capture-engine cg --json
+```
+
+Before clicks or typing, keep the display awake long enough for the action:
+
+```bash
+/usr/bin/caffeinate -d -u -t 45 >/dev/null 2>&1 & sleep 1
+/opt/homebrew/bin/peekaboo click --snapshot <snapshot-id> --id <element-id> --no-remote --input-strategy synthFirst --json
+/opt/homebrew/bin/peekaboo type --text '<text>' --return --delay 40 --profile linear --no-remote --input-strategy synthFirst --json
+```
+
+Do not ask the user to paste secrets into chat. If a password has to be typed into a headful UI,
+read it from an approved local private file or secret source and type it directly without printing
+it.
+
 ## Purpose
 
 Surface CLI is a contract-first mail CLI for multi-provider, multi-account email.
