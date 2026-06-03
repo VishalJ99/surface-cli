@@ -20,8 +20,11 @@ Surface adds `provider = "imap"` with default `transport = "imap-smtp"`.
 
 `surface auth login <account>` for this transport stores IMAP host/port/security, SMTP
 host/port/security, username, and mailbox/app password in the account auth directory. The password
-must come from a local source such as an environment variable, file, or password-command; it is not
-stored in the public repo, command docs, or `config.toml`.
+can be supplied directly with `--password <password>` or through a local source such as an
+environment variable, file, or password-command. `--password` treats the flag value as the
+mailbox/app password, but documented setup should prefer env/file/command sources because direct
+CLI passwords can leak through shell history, process listings, terminal logs, or agent
+transcripts. The password is not stored in the public repo or `config.toml`.
 
 IMAP locators use the existing provider locator table. Thread and message identity is based on the
 mailbox plus IMAP UID/UIDVALIDITY, with RFC message IDs used as additional metadata when present.

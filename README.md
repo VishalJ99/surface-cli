@@ -126,23 +126,41 @@ client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE
 For generic IMAP/SMTP, `provider=imap` uses the provider's mail server settings
 directly. It does not need a Google Cloud project, OAuth client JSON, Microsoft
 Graph app registration, or browser automation. It does need IMAP settings, SMTP
-settings, a username, and a mailbox or app password from a local secret source.
+settings, a username, and a mailbox or app password.
+
+The direct flag is `--password <password>`. For normal setup, prefer
+`--password-env`, `--password-file`, or `--password-command` so the actual
+password is not written into shell history, process listings, terminal logs, or
+agent transcripts.
 
 GMX example:
 
 ```bash
+set -a
+. ~/.surface-cli/secrets/gmx.env
+set +a
+
 surface auth login gmx \
   --imap-host imap.gmx.com --imap-port 993 --imap-security tls \
   --smtp-host mail.gmx.com --smtp-port 587 --smtp-security starttls \
   --username you@gmx.com \
-  --password-command "security find-generic-password -w -s surface-gmx"
+  --password-env SURFACE_GMX_PASSWORD
 
 surface auth status gmx
+unset SURFACE_GMX_PASSWORD
+```
+
+Where `~/.surface-cli/secrets/gmx.env` is a private file outside the repo, kept
+with permissions such as `chmod 600`, containing:
+
+```bash
+SURFACE_GMX_PASSWORD='your-mailbox-or-app-password'
 ```
 
 For GMX, enable POP3/IMAP in GMX web settings before logging in. Prefer a
-password manager, macOS Keychain, `--password-command`, `--password-env`, or
-`--password-file`; do not put mailbox passwords in the repo or `config.toml`.
+password manager, env var, or private password file; do not put mailbox
+passwords in the repo or `config.toml`, and avoid typing real passwords directly
+with `--password` except for controlled one-off use.
 Surface reads MIME directly over IMAP, so it does not depend on webmail
 "show images" or "trust sender" UI. Remote images are not fetched; message body
 text, links, and MIME attachments can still be read and downloaded.

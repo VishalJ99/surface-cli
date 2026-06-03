@@ -103,12 +103,20 @@ IMAP/SMTP auth notes:
   - `--smtp-port <port>`
   - `--smtp-security <tls|starttls|none>`
   - `--username <username>`
-  - exactly one password source: `--password-env <name>`, `--password-file <path>`, or
-    `--password-command <command>`
+  - exactly one password source: `--password <password>`, `--password-env <name>`,
+    `--password-file <path>`, or `--password-command <command>`
+- `--password <password>` treats the flag value as the mailbox/app password directly. It is
+  supported for compatibility and controlled one-off use, but docs and agent workflows should
+  prefer `--password-env`, `--password-file`, or `--password-command` because direct CLI passwords
+  can leak through shell history, process listings, terminal logs, or agent transcripts.
 
 Example GMX-style IMAP/SMTP login:
 
 ```bash
+set -a
+. ~/.surface-cli/secrets/gmx.env
+set +a
+
 surface account add gmx_test --provider imap --email you@gmx.com
 surface auth login gmx_test \
   --imap-host imap.gmx.com \
@@ -118,7 +126,9 @@ surface auth login gmx_test \
   --smtp-port 587 \
   --smtp-security starttls \
   --username you@gmx.com \
-  --password-command "security find-generic-password -w -s surface-gmx-test"
+  --password-env SURFACE_GMX_PASSWORD
+
+unset SURFACE_GMX_PASSWORD
 ```
 
 Generic IMAP/SMTP threading notes:

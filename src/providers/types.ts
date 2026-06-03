@@ -36,6 +36,7 @@ export interface AuthLoginOptions {
   smtpPort: number | undefined;
   smtpSecurity: ImapSmtpSecurityMode | undefined;
   username: string | undefined;
+  password: string | undefined;
   passwordEnv: string | undefined;
   passwordFile: string | undefined;
   passwordCommand: string | undefined;
