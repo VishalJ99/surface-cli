@@ -4,7 +4,7 @@ import test from "node:test";
 import type { ListResponse } from "imapflow";
 
 import type { MailAccount } from "../../contracts/account.js";
-import type { SentMessageResult } from "../../contracts/mail.js";
+import type { NormalizedAttachmentRecord, SentMessageResult } from "../../contracts/mail.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 import { imapAdapterTestHooks } from "./adapter.js";
 
@@ -174,6 +174,40 @@ test("buildComposeRaw neutralizes bare CR and LF header injection", () => {
 test("IMAP drafts append as seen drafts and sent appends as seen", () => {
   assert.deepEqual(imapAdapterTestHooks.draftAppendFlags, ["\\Draft", "\\Seen"]);
   assert.deepEqual(imapAdapterTestHooks.sentAppendFlags, ["\\Seen"]);
+});
+
+test("IMAP attachment provider keys remain unique for duplicate checksum parts", () => {
+  const messageLocator = {
+    mailbox: "INBOX",
+    uid_validity: "1",
+    uid: 42,
+    message_id: "<invite@example.com>",
+    in_reply_to: null,
+    references: null,
+  };
+  const attachment = (index: number): NormalizedAttachmentRecord => ({
+    attachment_id: "",
+    filename: "invite.ics",
+    mime_type: "text/calendar",
+    size_bytes: 123,
+    inline: false,
+    locator: {
+      kind: "attachment",
+      locator: {
+        mailbox: "INBOX",
+        uid_validity: "1",
+        uid: 42,
+        index,
+        checksum: "same-calendar-checksum",
+        filename: "invite.ics",
+      },
+    },
+  });
+
+  assert.notEqual(
+    imapAdapterTestHooks.imapAttachmentProviderKey(messageLocator, attachment(0), 0),
+    imapAdapterTestHooks.imapAttachmentProviderKey(messageLocator, attachment(1), 1),
+  );
 });
 
 test("reply recipients treat Reply-To as authoritative over From", () => {

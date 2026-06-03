@@ -311,7 +311,7 @@ function imapMessageProviderKey(locator: ImapMessageLocator): string {
 function imapAttachmentProviderKey(messageLocator: ImapMessageLocator, attachment: NormalizedAttachmentRecord, index: number): string {
   const checksum = attachment.locator?.locator.checksum;
   if (typeof checksum === "string" && checksum) {
-    return `imap-attachment:${messageLocator.mailbox}:${messageLocator.uid_validity}:${messageLocator.uid}:${checksum}`;
+    return `imap-attachment:${messageLocator.mailbox}:${messageLocator.uid_validity}:${messageLocator.uid}:${index}:${checksum}`;
   }
   return `imap-attachment:${messageLocator.mailbox}:${messageLocator.uid_validity}:${messageLocator.uid}:${attachment.filename}:${index}`;
 }
@@ -1237,7 +1237,7 @@ function attachmentMetas(context: ProviderContext, messageRef: string): Attachme
 function attachmentIdentityKeys(locator: ImapAttachmentLocator): string[] {
   const keys: string[] = [];
   if (locator.checksum) {
-    keys.push(`checksum:${locator.checksum}`);
+    keys.push(`checksum:${locator.index}:${locator.checksum}`);
   }
   keys.push(`position:${locator.index}:${(locator.filename ?? "").trim().toLowerCase()}`);
   return keys;
@@ -1709,6 +1709,7 @@ export const imapAdapterTestHooks = {
   buildSentSearch,
   draftAppendFlags: DRAFT_APPEND_FLAGS,
   filterSentMessagesForQuery,
+  imapAttachmentProviderKey,
   replyReferences,
   resolveMailboxPath,
   sentAppendFlags: SENT_APPEND_FLAGS,
