@@ -4,6 +4,7 @@ import type {
   NormalizedAttachmentRecord,
   NormalizedMessageRecord,
   NormalizedThreadRecord,
+  SentMessageResult,
   ThreadResult,
 } from "../contracts/mail.js";
 
@@ -25,6 +26,17 @@ function toPublicMessage(message: NormalizedMessageRecord): MessageResult {
     body: message.body,
     attachments: message.attachments.map(toPublicAttachment),
     ...(message.invite ? { invite: message.invite } : {}),
+  };
+}
+
+export function toPublicSentMessage(
+  thread: NormalizedThreadRecord,
+  message: NormalizedMessageRecord,
+): SentMessageResult {
+  return {
+    ...toPublicMessage(message),
+    thread_ref: thread.thread_ref,
+    source: thread.source,
   };
 }
 

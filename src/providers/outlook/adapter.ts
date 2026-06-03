@@ -25,9 +25,12 @@ import type {
   SendMessageInput,
   SendResultEnvelope,
   SearchQuery,
+  SentMessageResult,
+  SentQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
 import { SurfaceError } from "../../lib/errors.js";
+import { toPublicSentMessage } from "../../lib/public-mail.js";
 import { assertWriteAllowed, collectWriteRecipients } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
@@ -42,6 +45,7 @@ import {
   collectSearchConversationIds,
   collectUnreadConversationIds,
   fetchConversationBundle,
+  openSentFolder,
   waitForOutlookMailboxReady,
   type OutlookConversationItem,
   type OutlookThreadBundle,
@@ -172,6 +176,38 @@ function threadMatchesStructuredFilters(thread: NormalizedThreadRecord, query: S
   }
 
   return true;
+}
+
+function normalizeComparableEmail(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function identityEmails(account: MailAccount, context: ProviderContext): Set<string> {
+  const identity = context.db.getAccountIdentity(account);
+  return new Set(
+    [identity.primary_email, account.email, ...identity.email_aliases]
+      .map(normalizeComparableEmail)
+      .filter(Boolean),
+  );
+}
+
+function messageWasSentByAccount(message: NormalizedMessageRecord, emails: Set<string>): boolean {
+  const fromEmail = normalizeComparableEmail(message.envelope.from?.email);
+  return Boolean(fromEmail && emails.has(fromEmail));
+}
+
+function messageMatchesRecipient(message: NormalizedMessageRecord, recipient: string | undefined): boolean {
+  if (!recipient) {
+    return true;
+  }
+  const normalizedRecipient = normalizeComparableEmail(recipient);
+  return [...message.envelope.to, ...message.envelope.cc]
+    .some((participant) => normalizeComparableEmail(participant.email) === normalizedRecipient);
+}
+
+function sentTimestamp(message: SentMessageResult): number {
+  const parsed = Date.parse(message.envelope.sent_at ?? message.envelope.received_at ?? "");
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function inferThreadRsvpStatus(messages: NormalizedMessageRecord[]): string | null {
@@ -1536,6 +1572,53 @@ export async function fetchUnreadOutlookWithSession(
     }));
 }
 
+export async function fetchSentOutlookWithSession(
+  account: MailAccount,
+  query: SentQuery,
+  context: ProviderContext,
+  browserSession?: OutlookSession,
+): Promise<SentMessageResult[]> {
+  return withManagedOutlookSession(context, browserSession, async (session) => {
+    const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
+      timeoutMs: context.config.providerTimeoutMs,
+    });
+    const fetchLimit = Math.min(Math.max(query.limit * 5, query.limit), 100);
+
+    let conversationIds: string[];
+    if (query.recipient?.trim()) {
+      await applySearchQuery(session.page, `to:${quoteOutlookSearchValue(query.recipient)}`);
+      conversationIds = await collectSearchConversationIds(session.page, fetchLimit);
+    } else {
+      await openSentFolder(session.page);
+      conversationIds = await collectCurrentConversationIds(session.page, fetchLimit);
+    }
+
+    const bundles: OutlookThreadBundle[] = [];
+    for (const conversationId of conversationIds) {
+      bundles.push(await fetchConversationBundle(session.context.request, capturedSession, conversationId));
+    }
+
+    const persisted = await persistThreads(account, context, bundles.map((bundle) => normalizeThread(bundle)));
+    const summarized = await summarizeAndPersistThreads(
+      persisted,
+      context.config,
+      context.db,
+      context.db.getAccountIdentity(account),
+    );
+    const accountEmails = identityEmails(account, context);
+    const results = summarized
+      .flatMap((thread) =>
+        thread.messages
+          .filter((message) => messageWasSentByAccount(message, accountEmails))
+          .filter((message) => messageMatchesRecipient(message, query.recipient))
+          .map((message) => toPublicSentMessage(thread, message)))
+      .sort((left, right) => sentTimestamp(right) - sentTimestamp(left))
+      .slice(0, query.limit);
+
+    return results;
+  });
+}
+
 export async function refreshOutlookThreadWithSession(
   account: MailAccount,
   threadRef: string,
@@ -1721,6 +1804,10 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     context: ProviderContext,
   ): Promise<NormalizedThreadRecord[]> {
     return fetchUnreadOutlookWithSession(account, query, context);
+  }
+
+  async fetchSent(account: MailAccount, query: SentQuery, context: ProviderContext): Promise<SentMessageResult[]> {
+    return fetchSentOutlookWithSession(account, query, context);
   }
 
   async refreshThread(

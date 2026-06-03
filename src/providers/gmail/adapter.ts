@@ -24,9 +24,12 @@ import type {
   SearchQuery,
   SendMessageInput,
   SendResultEnvelope,
+  SentMessageResult,
+  SentQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
 import { SurfaceError } from "../../lib/errors.js";
+import { toPublicSentMessage } from "../../lib/public-mail.js";
 import { assertWriteAllowed } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
@@ -38,6 +41,7 @@ import {
   downloadGmailAttachmentBytes,
   getGoogleCalendarEvent,
   getGmailThread,
+  listGmailMessages,
   listGmailThreads,
   listGoogleCalendarEventsByIcalUid,
   modifyGmailMessage,
@@ -219,6 +223,24 @@ function buildGmailSearchQuery(query: SearchQuery): string | undefined {
     parts.push(gmailLabelSearchOperator(label));
   }
   return parts.length > 0 ? parts.join(" ").trim() : undefined;
+}
+
+function buildGmailRecipientQuery(recipient: string): string {
+  const quoted = quoteGmailSearchValue(recipient);
+  return `{to:${quoted} cc:${quoted} bcc:${quoted}}`;
+}
+
+function normalizeComparableEmail(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function messageMatchesRecipient(message: NormalizedMessageRecord, recipient: string | undefined): boolean {
+  if (!recipient) {
+    return true;
+  }
+  const normalizedRecipient = normalizeComparableEmail(recipient);
+  return [...message.envelope.to, ...message.envelope.cc]
+    .some((participant) => normalizeComparableEmail(participant.email) === normalizedRecipient);
 }
 
 function threadMatchesStructuredFilters(thread: NormalizedThreadRecord, query: SearchQuery): boolean {
@@ -1289,6 +1311,62 @@ async function fetchGmailThreads(
   return summarizeAndPersistThreads(persisted, context.config, context.db, context.db.getAccountIdentity(account));
 }
 
+async function fetchGmailSentMessages(
+  account: MailAccount,
+  context: ProviderContext,
+  query: SentQuery,
+): Promise<SentMessageResult[]> {
+  const queryParts = ["in:sent"];
+  if (query.recipient?.trim()) {
+    queryParts.push(buildGmailRecipientQuery(query.recipient));
+  }
+
+  const messageStubs = await listGmailMessages(account, context, {
+    q: queryParts.join(" ").trim(),
+    maxResults: query.limit,
+  });
+
+  if (messageStubs.length === 0) {
+    return [];
+  }
+
+  const threadIds = [...new Set(messageStubs.map((message) => message.threadId).filter((id): id is string => Boolean(id)))];
+  const hydrated = await Promise.all(threadIds.map((threadId) => getGmailThread(account, context, threadId)));
+  const normalized = await Promise.all(hydrated.map((thread) => normalizeGmailThread(account, context, thread)));
+  const persisted = await persistThreads(account, context, normalized);
+  const summarized = await summarizeAndPersistThreads(
+    persisted,
+    context.config,
+    context.db,
+    context.db.getAccountIdentity(account),
+  );
+  const threadsByProviderId = new Map(
+    summarized
+      .map((thread) => [thread.provider_ids?.thread_id, thread] as const)
+      .filter((entry): entry is [string, NormalizedThreadRecord] => Boolean(entry[0])),
+  );
+
+  const results: SentMessageResult[] = [];
+  const seen = new Set<string>();
+  for (const stub of messageStubs) {
+    if (!stub.id || !stub.threadId) {
+      continue;
+    }
+    const thread = threadsByProviderId.get(stub.threadId);
+    const message = thread?.messages.find((candidate) => candidate.provider_ids?.message_id === stub.id);
+    if (!thread || !message || seen.has(message.message_ref) || !messageMatchesRecipient(message, query.recipient)) {
+      continue;
+    }
+    seen.add(message.message_ref);
+    results.push(toPublicSentMessage(thread, message));
+    if (results.length >= query.limit) {
+      break;
+    }
+  }
+
+  return results;
+}
+
 async function sendOrDraftGmailMessage(
   account: MailAccount,
   context: ProviderContext,
@@ -1374,6 +1452,10 @@ export class GmailApiAdapter implements MailProviderAdapter {
       kind: "fetch-unread",
       limit: query.limit,
     });
+  }
+
+  async fetchSent(account: MailAccount, query: SentQuery, context: ProviderContext): Promise<SentMessageResult[]> {
+    return fetchGmailSentMessages(account, context, query);
   }
 
   async refreshThread(

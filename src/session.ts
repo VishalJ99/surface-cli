@@ -11,6 +11,8 @@ import type {
   NormalizedThreadRecord,
   ReadResultEnvelope,
   SearchQuery,
+  SentMessageResult,
+  SentQuery,
 } from "./contracts/mail.js";
 import { SurfaceError } from "./lib/errors.js";
 import { nowIsoUtc } from "./lib/time.js";
@@ -28,6 +30,7 @@ export type SessionRpcMethod =
   | "ping"
   | "search"
   | "fetch-unread"
+  | "sent"
   | "refresh-thread"
   | "read-message"
   | "shutdown";
@@ -365,6 +368,17 @@ export async function sessionFetchUnread(
   const result = await callSession(record, "fetch-unread", { query });
   context.db.touchSession(sessionId);
   return result as NormalizedThreadRecord[];
+}
+
+export async function sessionSent(
+  context: AccountRuntimeContext,
+  sessionId: string,
+  query: SentQuery,
+): Promise<SentMessageResult[]> {
+  const record = validateSessionForAccount(context, sessionId, context.account);
+  const result = await callSession(record, "sent", { query });
+  context.db.touchSession(sessionId);
+  return result as SentMessageResult[];
 }
 
 export async function sessionRefreshThread(

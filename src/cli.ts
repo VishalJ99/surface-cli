@@ -27,6 +27,7 @@ import {
   sessionReadMessage,
   sessionRefreshThread,
   sessionSearch,
+  sessionSent,
   sessionStartEnvelope,
   startWarmSession,
   stopWarmSession,
@@ -35,6 +36,8 @@ import {
 interface GlobalOptions {
   config?: string;
 }
+
+const DEFAULT_SENT_LIMIT = 10;
 
 function positiveInt(value: string): number {
   const parsed = Number.parseInt(value, 10);
@@ -599,6 +602,39 @@ mailCommand
           account: context.account.name,
           query,
           threads: threads.map(toPublicThread),
+        });
+      },
+    );
+  });
+
+mailCommand
+  .command("sent")
+  .description("List recent sent messages.")
+  .requiredOption("--account <account>", "Logical account name")
+  .option("--session <session_id>", "Use a warm session id")
+  .option("--recipient <email>", "Recipient filter for sent messages")
+  .addOption(new Option("--limit <limit>", "Max sent messages to return").argParser(positiveInt))
+  .action(async (options, command: Command) => {
+    await runAccountAction(
+      command.optsWithGlobals<GlobalOptions>(),
+      options.account,
+      async (context) => {
+        const recipient = normalizeOptionalString(options.recipient);
+        const query = {
+          ...(recipient ? { recipient } : {}),
+          limit: options.limit ?? DEFAULT_SENT_LIMIT,
+        };
+        const messages = options.session
+          ? await sessionSent(context, options.session, query)
+          : await resolveProviderAdapter(context.account).fetchSent(context.account, query, context);
+
+        writeJson({
+          schema_version: "1",
+          command: "sent",
+          generated_at: nowIsoUtc(),
+          account: context.account.name,
+          query,
+          messages,
         });
       },
     );

@@ -60,3 +60,4 @@ Use zero-padded sequential numbers:
 - `0036-html-hyperlinks-are-preserved-inline-in-body-text.md`
 - `0037-skill-install-command-installs-bundled-agent-skills.md`
 - `0038-bounded-unread-state-refresh.md`
+- `0039-sent-mail-is-message-first.md`

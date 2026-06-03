@@ -12,6 +12,11 @@ export interface GmailThreadStub {
   historyId?: string;
 }
 
+export interface GmailMessageStub {
+  id?: string;
+  threadId?: string;
+}
+
 export interface GmailThreadRecord {
   id?: string;
   historyId?: string;
@@ -61,6 +66,11 @@ export interface GoogleCalendarEventRecord {
 
 interface GmailListThreadsResponse {
   threads?: GmailThreadStub[];
+  nextPageToken?: string;
+}
+
+interface GmailListMessagesResponse {
+  messages?: GmailMessageStub[];
   nextPageToken?: string;
 }
 
@@ -232,6 +242,22 @@ export async function listGmailThreads(
   });
 
   return payload.threads ?? [];
+}
+
+export async function listGmailMessages(
+  account: MailAccount,
+  context: ProviderContext,
+  options: { q?: string; labelIds?: string[]; maxResults: number },
+): Promise<GmailMessageStub[]> {
+  const payload = await gmailApiJson<GmailListMessagesResponse>(account, context, "/messages", {
+    searchParams: {
+      maxResults: options.maxResults,
+      ...(options.q ? { q: options.q } : {}),
+      ...(options.labelIds && options.labelIds.length > 0 ? { labelIds: options.labelIds.join(",") } : {}),
+    },
+  });
+
+  return payload.messages ?? [];
 }
 
 export async function getGmailThread(

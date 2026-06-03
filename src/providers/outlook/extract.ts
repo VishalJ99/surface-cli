@@ -268,6 +268,15 @@ export async function applySearchQuery(page: Page, query: string): Promise<void>
   await resetMessageListToTop(page);
 }
 
+export async function openSentFolder(page: Page): Promise<void> {
+  await page.goto("https://outlook.office.com/mail/sentitems", {
+    waitUntil: "domcontentloaded",
+    timeout: 30_000,
+  });
+  await waitForOutlookMailboxReady(page, 30_000);
+  await resetMessageListToTop(page);
+}
+
 async function collectVisibleRows(page: Page): Promise<OutlookMessageRow[]> {
   return page.locator('[role="option"]').evaluateAll((elements) =>
     elements.map((element) => ({

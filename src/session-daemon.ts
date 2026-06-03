@@ -3,10 +3,11 @@
 import { createServer } from "node:net";
 import { existsSync, rmSync } from "node:fs";
 
-import type { FetchUnreadQuery, SearchQuery } from "./contracts/mail.js";
+import type { FetchUnreadQuery, SearchQuery, SentQuery } from "./contracts/mail.js";
 import { errorToEnvelope, SurfaceError } from "./lib/errors.js";
 import {
   fetchUnreadOutlookWithSession,
+  fetchSentOutlookWithSession,
   readOutlookMessageWithSession,
   refreshOutlookThreadWithSession,
   searchOutlookWithSession,
@@ -257,6 +258,14 @@ async function main(): Promise<void> {
                 result = await fetchUnreadOutlookWithSession(
                   account,
                   request.params?.query as FetchUnreadQuery,
+                  context,
+                  session,
+                );
+                break;
+              case "sent":
+                result = await fetchSentOutlookWithSession(
+                  account,
+                  request.params?.query as SentQuery,
                   context,
                   session,
                 );
