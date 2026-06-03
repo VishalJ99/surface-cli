@@ -189,10 +189,12 @@ List recent sent messages:
 ```bash
 surface mail sent --account uni
 surface mail sent --account uni --recipient person@example.com --limit 10
+surface mail sent --account uni --thread thr_01... --limit 10
 ```
 
 `sent` is message-first: the default limit is the last 10 sent messages, and each result includes a
-stable `thread_ref` so agents can open the full conversation when needed.
+stable `thread_ref` so agents can open the full conversation when needed. Use `--thread <thread_ref>`
+when you already know the conversation and only want your sent messages from that thread.
 
 Search with structured filters:
 
@@ -218,6 +220,7 @@ surface session start --account uni
 surface mail fetch-unread --account uni --session sess_01... --limit 10
 surface mail sync-unread-state --account uni --session sess_01... --limit 50
 surface mail sent --account uni --session sess_01... --limit 10
+surface mail sent --account uni --session sess_01... --thread thr_01... --limit 10
 surface mail search --account uni --session sess_01... --text "exam board" --limit 10
 surface session stop sess_01...
 ```

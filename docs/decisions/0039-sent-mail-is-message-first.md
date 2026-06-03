@@ -23,7 +23,7 @@ context is needed.
 Add:
 
 ```bash
-surface mail sent --account <account> [--limit <n>] [--recipient <email>] [--session <session_id>]
+surface mail sent --account <account> [--limit <n>] [--recipient <email>] [--thread <thread_ref>] [--session <session_id>]
 ```
 
 `sent` is message-first:
@@ -34,10 +34,16 @@ surface mail sent --account <account> [--limit <n>] [--recipient <email>] [--ses
 - the public result has top-level `messages[]`, not `threads[]`
 - agents should use `surface mail thread get <thread_ref> --refresh` when they need full
   conversation context
+- `--thread <thread_ref>` restricts the message-first result set to account-authored sent messages
+  inside one stable local thread
 
 The optional `--recipient` filter is a normalized recipient filter for sent messages. Providers may
 use native recipient search where available, but the public contract is still based on normalized
 message recipients that Surface can expose.
+
+The optional `--thread` filter is based on Surface's stable local `thread_ref`, not a provider
+thread id. Providers should refresh that thread when possible, then filter the normalized stored
+messages. `--thread` may combine with `--recipient`; both filters must match.
 
 Provider results are still persisted through the existing normalized thread/message cache. No
 SQLite schema migration is required for this command because the existing `messages` table already
@@ -50,6 +56,8 @@ locators preserve refreshability.
 - `sent` can return multiple messages from the same thread.
 - `sent` output is smaller and more action-oriented than a full thread result, but includes
   `thread_ref` for follow-up reads.
+- `sent --thread` gives agents a compact style/context check for a known conversation without
+  returning the whole thread body.
 - Outlook v1 may need to inspect a bounded set of sent-folder conversations and extract
   account-authored messages; account-owner identity should be configured for reliable filtering.
 - If a future use case needs fully offline message-first sent history, Surface may add message-level

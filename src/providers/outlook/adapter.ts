@@ -31,6 +31,13 @@ import type {
 } from "../../contracts/mail.js";
 import { SurfaceError } from "../../lib/errors.js";
 import { toPublicSentMessage } from "../../lib/public-mail.js";
+import {
+  accountIdentityEmails,
+  messageMatchesRecipient,
+  normalizeComparableEmail,
+  sentMessagesFromStoredThread,
+  sentTimestamp,
+} from "../../lib/sent-mail.js";
 import { assertWriteAllowed, collectWriteRecipients } from "../../lib/write-safety.js";
 import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
@@ -178,36 +185,13 @@ function threadMatchesStructuredFilters(thread: NormalizedThreadRecord, query: S
   return true;
 }
 
-function normalizeComparableEmail(value: string | null | undefined): string {
-  return (value ?? "").trim().toLowerCase();
-}
-
 function identityEmails(account: MailAccount, context: ProviderContext): Set<string> {
-  const identity = context.db.getAccountIdentity(account);
-  return new Set(
-    [identity.primary_email, account.email, ...identity.email_aliases]
-      .map(normalizeComparableEmail)
-      .filter(Boolean),
-  );
+  return accountIdentityEmails(account, context);
 }
 
 function messageWasSentByAccount(message: NormalizedMessageRecord, emails: Set<string>): boolean {
   const fromEmail = normalizeComparableEmail(message.envelope.from?.email);
   return Boolean(fromEmail && emails.has(fromEmail));
-}
-
-function messageMatchesRecipient(message: NormalizedMessageRecord, recipient: string | undefined): boolean {
-  if (!recipient) {
-    return true;
-  }
-  const normalizedRecipient = normalizeComparableEmail(recipient);
-  return [...message.envelope.to, ...message.envelope.cc]
-    .some((participant) => normalizeComparableEmail(participant.email) === normalizedRecipient);
-}
-
-function sentTimestamp(message: SentMessageResult): number {
-  const parsed = Date.parse(message.envelope.sent_at ?? message.envelope.received_at ?? "");
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function inferThreadRsvpStatus(messages: NormalizedMessageRecord[]): string | null {
@@ -1579,6 +1563,11 @@ export async function fetchSentOutlookWithSession(
   browserSession?: OutlookSession,
 ): Promise<SentMessageResult[]> {
   return withManagedOutlookSession(context, browserSession, async (session) => {
+    if (query.thread_ref) {
+      await refreshOutlookThreadWithSession(account, query.thread_ref, context, session);
+      return sentMessagesFromStoredThread(account, context, query);
+    }
+
     const capturedSession = await captureOutlookServiceSession(session.context, session.page, {
       timeoutMs: context.config.providerTimeoutMs,
     });

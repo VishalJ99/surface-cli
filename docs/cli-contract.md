@@ -177,7 +177,7 @@ Example session start result:
 
 - `surface mail search --account <account> [--session <session_id>] [--text <query>] [--from <sender>] [--subject <subject>] [--mailbox <mailbox>] [--label <label>]...`
 - `surface mail fetch-unread --account <account> [--session <session_id>] ...`
-- `surface mail sent --account <account> [--session <session_id>] [--limit <limit>] [--recipient <email>]`
+- `surface mail sent --account <account> [--session <session_id>] [--limit <limit>] [--recipient <email>] [--thread <thread_ref>]`
 - `surface mail sync-unread-state --account <account> [--limit <limit>] [--session <session_id>] [--rebaseline]`
 - `surface mail thread get <thread_ref> [--refresh] [--session <session_id>]`
 - `surface mail read <message_ref> [--refresh] [--session <session_id>] [--mark-read]`
@@ -445,6 +445,10 @@ inspect the exact message or jump into the full conversation with `surface mail 
 To/Cc recipients. Providers may use native recipient search as a narrowing step, then post-filter
 against normalized recipients before returning JSON.
 
+`--thread` narrows results to account-authored sent messages inside one stable local `thread_ref`.
+Surface refreshes that thread through the provider when possible, then filters the normalized
+stored messages. `--thread` may be combined with `--recipient`; both filters must match.
+
 Recommended example:
 
 ```json
@@ -454,6 +458,7 @@ Recommended example:
   "generated_at": "2026-05-22T10:42:00Z",
   "account": "work",
   "query": {
+    "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2",
     "recipient": "recipient@example.com",
     "limit": 10
   },
