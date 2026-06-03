@@ -1175,9 +1175,15 @@ async function attachComposeFiles(
     const chooser = await openOutlookAttachmentFileChooser(page, account);
     await chooser.setFiles(attachment.path);
     await acceptOutlookAttachAsCopyIfPrompted(page);
-    await page.getByText(attachment.filename, { exact: true }).first().waitFor({ timeout: 30_000 }).catch(async () => {
-      await page.waitForTimeout(3_000);
-    });
+    try {
+      await page.getByText(attachment.filename).first().waitFor({ timeout: 30_000 });
+    } catch {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook attachment '${attachment.filename}' did not finish uploading before send.`,
+        { account: account.name },
+      );
+    }
   }
 }
 
