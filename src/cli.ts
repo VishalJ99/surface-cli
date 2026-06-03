@@ -32,6 +32,7 @@ import {
   startWarmSession,
   stopWarmSession,
 } from "./session.js";
+import type { ImapSmtpSecurityMode } from "./providers/types.js";
 
 interface GlobalOptions {
   config?: string;
@@ -40,9 +41,12 @@ interface GlobalOptions {
 const DEFAULT_SENT_LIMIT = 10;
 
 function positiveInt(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error("Expected a positive integer.");
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new SurfaceError("invalid_argument", "Expected a positive integer.");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new SurfaceError("invalid_argument", "Expected a safe positive integer.");
   }
   return parsed;
 }
@@ -59,6 +63,17 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeOptionalImapSmtpSecurity(value: unknown): ImapSmtpSecurityMode | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "tls" || normalized === "starttls" || normalized === "none") {
+    return normalized;
+  }
+  throw new SurfaceError("invalid_argument", "Security mode must be one of: tls, starttls, none.");
+}
+
 function resolveAccountAddTransport(providerValue: unknown, transportValue: unknown): string {
   const explicitTransport = normalizeOptionalString(transportValue);
   if (explicitTransport) {
@@ -71,6 +86,8 @@ function resolveAccountAddTransport(providerValue: unknown, transportValue: unkn
       return "gmail-api";
     case "outlook":
       return "outlook-web-playwright";
+    case "imap":
+      return "imap-smtp";
   }
 }
 
@@ -246,7 +263,7 @@ const accountCommand = program.command("account").description("Manage Surface ac
 accountCommand
   .command("add")
   .argument("<name>", "Logical account name, for example work or personal")
-  .requiredOption("--provider <provider>", "Provider family, for example gmail or outlook")
+  .requiredOption("--provider <provider>", "Provider family, for example gmail, outlook, or imap")
   .option("--transport <transport>", "Transport name, defaults from provider")
   .requiredOption("--email <email>", "Primary mailbox email address")
   .action(async (name: string, options, command: Command) => {
@@ -362,6 +379,16 @@ authCommand
   .command("login")
   .argument("<account>", "Logical account name")
   .option("--remote-host <host>", "Run auth login against an existing Surface account on a remote host")
+  .option("--imap-host <host>", "IMAP server hostname for imap-smtp accounts")
+  .addOption(new Option("--imap-port <port>", "IMAP server port for imap-smtp accounts").argParser(positiveInt))
+  .option("--imap-security <mode>", "IMAP security mode: tls, starttls, or none")
+  .option("--smtp-host <host>", "SMTP server hostname for imap-smtp accounts")
+  .addOption(new Option("--smtp-port <port>", "SMTP server port for imap-smtp accounts").argParser(positiveInt))
+  .option("--smtp-security <mode>", "SMTP security mode: tls, starttls, or none")
+  .option("--username <username>", "Mailbox username for imap-smtp accounts")
+  .option("--password-env <name>", "Environment variable containing the mailbox or app password")
+  .option("--password-file <path>", "File containing the mailbox or app password")
+  .option("--password-command <command>", "Command that prints the mailbox or app password to stdout")
   .action(async (accountName: string, options, command: Command) => {
     if (options.remoteHost) {
       await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
@@ -372,7 +399,21 @@ authCommand
 
     await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
       const adapter = resolveProviderAdapter(context.account);
-      const status = await adapter.login(context.account, context);
+      const status = await adapter.login(context.account, {
+        ...context,
+        authLoginOptions: {
+          imapHost: normalizeOptionalString(options.imapHost),
+          imapPort: options.imapPort,
+          imapSecurity: normalizeOptionalImapSmtpSecurity(options.imapSecurity),
+          smtpHost: normalizeOptionalString(options.smtpHost),
+          smtpPort: options.smtpPort,
+          smtpSecurity: normalizeOptionalImapSmtpSecurity(options.smtpSecurity),
+          username: normalizeOptionalString(options.username),
+          passwordEnv: normalizeOptionalString(options.passwordEnv),
+          passwordFile: normalizeOptionalString(options.passwordFile),
+          passwordCommand: normalizeOptionalString(options.passwordCommand),
+        },
+      });
       writeJson({
         schema_version: "1",
         command: "auth-login",

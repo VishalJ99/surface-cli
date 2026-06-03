@@ -12,6 +12,7 @@ each provider has exactly one implemented transport:
 
 - Gmail uses `gmail-api`
 - Outlook uses `outlook-web-playwright`
+- Generic IMAP accounts use `imap-smtp`
 
 Requiring users and agents to pass both `--provider` and `--transport` during account onboarding
 exposes implementation detail before it is useful.
@@ -23,6 +24,7 @@ Surface chooses the v1 default transport from the provider:
 
 - `--provider gmail` defaults to `gmail-api`
 - `--provider outlook` defaults to `outlook-web-playwright`
+- `--provider imap` defaults to `imap-smtp`
 
 Explicit `--transport` remains supported so future alternate adapters can be selected without
 changing the account storage model or public JSON shape.

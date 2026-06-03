@@ -31,7 +31,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 Account identity notes:
 
 - `account add` defaults `--transport` from `--provider` in v1:
-  `gmail -> gmail-api`, `outlook -> outlook-web-playwright`
+  `gmail -> gmail-api`, `outlook -> outlook-web-playwright`, `imap -> imap-smtp`
 - `account add --email` seeds the account-owner identity with source `configured`
 - Gmail `auth login` and `auth status` upgrade the primary email to `provider_verified` when the
   authenticated Gmail profile exposes an address
@@ -87,6 +87,39 @@ Gmail auth notes:
   - `./client_secret.json` in the current working directory
 - Gmail auth stores refresh-token state under:
   - `~/.surface-cli/auth/<account_id>/gmail-token.json`
+
+IMAP/SMTP auth notes:
+
+- `surface account add <account> --provider imap --email <email>` defaults to
+  `transport = "imap-smtp"`.
+- `surface auth login <account>` for `imap-smtp` stores server settings and the mailbox/app
+  password under `~/.surface-cli/auth/<account_id>/imap-smtp.json`.
+- IMAP/SMTP accounts do not require a Google Cloud project or repo-root credentials JSON.
+- IMAP/SMTP login accepts provider settings through these flags:
+  - `--imap-host <host>`
+  - `--imap-port <port>`
+  - `--imap-security <tls|starttls|none>`
+  - `--smtp-host <host>`
+  - `--smtp-port <port>`
+  - `--smtp-security <tls|starttls|none>`
+  - `--username <username>`
+  - exactly one password source: `--password-env <name>`, `--password-file <path>`, or
+    `--password-command <command>`
+
+Example GMX-style IMAP/SMTP login:
+
+```bash
+surface account add gmx_test --provider imap --email you@gmx.net
+surface auth login gmx_test \
+  --imap-host imap.gmx.net \
+  --imap-port 993 \
+  --imap-security tls \
+  --smtp-host mail.gmx.net \
+  --smtp-port 587 \
+  --smtp-security starttls \
+  --username you@gmx.net \
+  --password-command "security find-generic-password -w -s surface-gmx-test"
+```
 
 Remote auth login returns the normal `auth-login` envelope plus:
 
