@@ -93,6 +93,12 @@ interface ImapAttachmentLocator {
   filename: string | null;
 }
 
+interface ResolvedComposeEmails {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+}
+
 function sourceInfo(account: MailAccount) {
   return {
     provider: account.provider,
@@ -1546,6 +1552,61 @@ function withoutAccountEmails(emails: string[], selfEmails: Set<string>): string
   return emails.filter((email) => !selfEmails.has(normalizeComparableEmail(email)));
 }
 
+function buildReplyRecipients(input: {
+  replyTo: string[];
+  from: string[];
+  originalTo: string[];
+  inputCc: string[];
+  inputBcc: string[];
+  selfEmails: Set<string>;
+}): ResolvedComposeEmails {
+  let to = normalizeEmailList(withoutAccountEmails(input.replyTo, input.selfEmails));
+  if (to.length === 0) {
+    to = normalizeEmailList(withoutAccountEmails(input.from, input.selfEmails));
+  }
+  if (to.length === 0) {
+    to = normalizeEmailList(withoutAccountEmails(input.originalTo, input.selfEmails));
+  }
+  return {
+    to,
+    cc: normalizeEmailList(input.inputCc),
+    bcc: normalizeEmailList(input.inputBcc),
+  };
+}
+
+function buildReplyAllRecipients(input: {
+  replyTo: string[];
+  from: string[];
+  originalTo: string[];
+  originalCc: string[];
+  inputCc: string[];
+  inputBcc: string[];
+  selfEmails: Set<string>;
+}): ResolvedComposeEmails {
+  let to = normalizeEmailList(withoutAccountEmails(input.replyTo, input.selfEmails));
+  if (to.length === 0) {
+    to = normalizeEmailList(withoutAccountEmails(input.from, input.selfEmails));
+  }
+  if (to.length === 0) {
+    to = normalizeEmailList(withoutAccountEmails(input.originalTo, input.selfEmails));
+  }
+  if (to.length === 0) {
+    to = normalizeEmailList(input.from);
+  }
+
+  const toComparable = new Set(to.map(normalizeComparableEmail));
+  const cc = normalizeEmailList([
+    ...withoutAccountEmails(input.originalTo, input.selfEmails).filter((email) => !toComparable.has(normalizeComparableEmail(email))),
+    ...withoutAccountEmails(input.originalCc, input.selfEmails).filter((email) => !toComparable.has(normalizeComparableEmail(email))),
+    ...input.inputCc,
+  ]);
+  return {
+    to,
+    cc,
+    bcc: normalizeEmailList(input.inputBcc),
+  };
+}
+
 function replyReferences(target: { messageId: string | null; references: string | null }): string | null {
   return target.references
     ? `${target.references}${target.messageId ? ` ${target.messageId}` : ""}`.trim()
@@ -1642,6 +1703,8 @@ async function mutateSeenFlag(
 
 export const imapAdapterTestHooks = {
   archivedThreadMatchesStoredMessage,
+  buildReplyAllRecipients,
+  buildReplyRecipients,
   buildComposeRaw,
   buildSentSearch,
   draftAppendFlags: DRAFT_APPEND_FLAGS,
@@ -1901,15 +1964,14 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
     const selfEmails = accountIdentityEmails(account, context);
     const replyTo = emailsFromAddressObject(target.parsed.replyTo);
     const from = emailsFromAddressObject(target.parsed.from);
-    let to = normalizeEmailList(withoutAccountEmails([...replyTo, ...from], selfEmails));
-    if (to.length === 0) {
-      to = normalizeEmailList(withoutAccountEmails(emailsFromAddressObject(target.parsed.to), selfEmails));
-    }
-    const recipients = {
-      to,
-      cc: normalizeEmailList(input.cc),
-      bcc: normalizeEmailList(input.bcc),
-    };
+    const recipients = buildReplyRecipients({
+      replyTo,
+      from,
+      originalTo: emailsFromAddressObject(target.parsed.to),
+      inputCc: input.cc,
+      inputBcc: input.bcc,
+      selfEmails,
+    });
     if (recipients.to.length === 0) {
       throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose a reply target.`, {
         account: account.name,
@@ -1958,25 +2020,15 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
     const originalTo = emailsFromAddressObject(target.parsed.to);
     const originalCc = emailsFromAddressObject(target.parsed.cc);
 
-    let to = normalizeEmailList(withoutAccountEmails([...replyTo, ...from], selfEmails));
-    if (to.length === 0) {
-      to = normalizeEmailList(withoutAccountEmails(originalTo, selfEmails));
-    }
-    if (to.length === 0) {
-      to = normalizeEmailList(from);
-    }
-
-    const toComparable = new Set(to.map(normalizeComparableEmail));
-    const cc = normalizeEmailList([
-      ...withoutAccountEmails(originalTo, selfEmails).filter((email) => !toComparable.has(normalizeComparableEmail(email))),
-      ...withoutAccountEmails(originalCc, selfEmails).filter((email) => !toComparable.has(normalizeComparableEmail(email))),
-      ...input.cc,
-    ]);
-    const recipients = {
-      to,
-      cc,
-      bcc: normalizeEmailList(input.bcc),
-    };
+    const recipients = buildReplyAllRecipients({
+      replyTo,
+      from,
+      originalTo,
+      originalCc,
+      inputCc: input.cc,
+      inputBcc: input.bcc,
+      selfEmails,
+    });
     if (recipients.to.length === 0) {
       throw new SurfaceError("unsupported", `Message '${messageRef}' does not expose reply-all recipients.`, {
         account: account.name,

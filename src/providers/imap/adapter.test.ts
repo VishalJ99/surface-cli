@@ -176,6 +176,37 @@ test("IMAP drafts append as seen drafts and sent appends as seen", () => {
   assert.deepEqual(imapAdapterTestHooks.sentAppendFlags, ["\\Seen"]);
 });
 
+test("reply recipients treat Reply-To as authoritative over From", () => {
+  const recipients = imapAdapterTestHooks.buildReplyRecipients({
+    replyTo: ["support@example.com"],
+    from: ["sender@example.com"],
+    originalTo: ["surface@example.com"],
+    inputCc: [],
+    inputBcc: [],
+    selfEmails: new Set(["surface@example.com"]),
+  });
+
+  assert.deepEqual(recipients.to, ["support@example.com"]);
+  assert.deepEqual(recipients.cc, []);
+  assert.deepEqual(recipients.bcc, []);
+});
+
+test("reply-all recipients do not add From when Reply-To is present", () => {
+  const recipients = imapAdapterTestHooks.buildReplyAllRecipients({
+    replyTo: ["support@example.com"],
+    from: ["sender@example.com"],
+    originalTo: ["surface@example.com", "other@example.com"],
+    originalCc: ["cc@example.com"],
+    inputCc: ["manual@example.com"],
+    inputBcc: [],
+    selfEmails: new Set(["surface@example.com"]),
+  });
+
+  assert.deepEqual(recipients.to, ["support@example.com"]);
+  assert.deepEqual(recipients.cc, ["other@example.com", "cc@example.com", "manual@example.com"]);
+  assert.deepEqual(recipients.bcc, []);
+});
+
 test("replyReferences appends the original Message-ID to existing references", () => {
   assert.equal(
     imapAdapterTestHooks.replyReferences({

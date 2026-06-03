@@ -102,10 +102,10 @@ function readPasswordFromCommand(command: string, account: MailAccount): string 
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 30_000,
     }).replace(/[\r\n]+$/g, "");
-  } catch (error) {
+  } catch {
     throw new SurfaceError(
       "invalid_argument",
-      `IMAP/SMTP password command failed: ${error instanceof Error ? error.message : String(error)}`,
+      "IMAP/SMTP password command failed.",
       { account: account.name },
     );
   }
@@ -220,3 +220,7 @@ export function writeImapSmtpAuthState(
 export function clearImapSmtpAuthState(context: ProviderContext): void {
   rmSync(imapSmtpAuthPath(context), { force: true });
 }
+
+export const imapAuthTestHooks = {
+  resolvePassword,
+};
