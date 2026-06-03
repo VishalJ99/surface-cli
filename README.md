@@ -145,10 +145,11 @@ surface auth status gmx
 ```
 
 Surface currently ships presets for GMX.com and GMX.net. For GMX, enable
-POP3/IMAP in GMX web settings before logging in. If two-factor authentication is
-enabled, use a GMX app-specific password; generic IMAP does not run browser
-2FA. If no preset exists for the mailbox domain, Surface will ask you to provide
-the IMAP/SMTP host, port, and security flags.
+POP3/IMAP in GMX web settings before logging in. Generic IMAP does not run
+browser 2FA; if the provider rejects the normal mailbox password after 2FA is
+enabled, use an app-specific password. If no preset exists for the mailbox
+domain, Surface will ask you to provide the IMAP/SMTP host, port, and security
+flags.
 
 Prefer a password manager, env var, or private password file; do not put mailbox
 passwords in the repo or `config.toml`, and avoid typing real passwords directly

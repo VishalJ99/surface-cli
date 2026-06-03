@@ -90,9 +90,10 @@ Google Cloud project, OAuth client JSON, Microsoft Graph app registration, or a
 browser session. Surface can infer server settings for supported domains such as
 `gmx.com` and `gmx.net`; custom IMAP providers still require the explicit
 `--imap-*` and `--smtp-*` flags. Generic IMAP does not run browser 2FA or OAuth
-consent. If 2FA is enabled, use the provider's app-specific password when one is
-available. `--password <password>` is supported and treats the flag value as the
-password directly, but prefer `--password-env`, `--password-file`, or
+consent. If the provider rejects the normal mailbox password after 2FA is
+enabled, use an app-specific password when one is available.
+`--password <password>` is supported and treats the flag value as the password
+directly, but prefer `--password-env`, `--password-file`, or
 `--password-command` because direct CLI passwords can leak through shell
 history, process listings, terminal logs, or agent transcripts. Do not ask the
 user to paste mailbox passwords into chat or store them in the repo.
