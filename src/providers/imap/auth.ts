@@ -24,6 +24,78 @@ export interface ImapSmtpAuthState {
   updated_at: string;
 }
 
+interface ImapSmtpServerSettings {
+  imap: ImapSmtpAuthState["imap"];
+  smtp: ImapSmtpAuthState["smtp"];
+}
+
+interface ImapSmtpPreset extends ImapSmtpServerSettings {
+  name: string;
+  domains: string[];
+}
+
+const IMAP_SMTP_PRESETS: ImapSmtpPreset[] = [
+  {
+    name: "GMX.com",
+    domains: ["gmx.com"],
+    imap: {
+      host: "imap.gmx.com",
+      port: 993,
+      security: "tls",
+    },
+    smtp: {
+      host: "mail.gmx.com",
+      port: 587,
+      security: "starttls",
+    },
+  },
+  {
+    name: "GMX.net",
+    domains: ["gmx.net"],
+    imap: {
+      host: "imap.gmx.net",
+      port: 993,
+      security: "tls",
+    },
+    smtp: {
+      host: "mail.gmx.net",
+      port: 587,
+      security: "starttls",
+    },
+  },
+];
+
+const REQUIRED_SERVER_FLAGS = [
+  "--imap-host",
+  "--imap-port",
+  "--imap-security",
+  "--smtp-host",
+  "--smtp-port",
+  "--smtp-security",
+].join(", ");
+
+function knownPresetDomains(): string {
+  return IMAP_SMTP_PRESETS.flatMap((preset) => preset.domains).sort().join(", ");
+}
+
+function mailboxDomain(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const atIndex = value.lastIndexOf("@");
+  if (atIndex < 0 || atIndex === value.length - 1) {
+    return undefined;
+  }
+  return value.slice(atIndex + 1).trim().toLowerCase();
+}
+
+function cloneSettings(settings: ImapSmtpServerSettings): ImapSmtpServerSettings {
+  return {
+    imap: { ...settings.imap },
+    smtp: { ...settings.smtp },
+  };
+}
+
 export function imapSmtpAuthPath(context: ProviderContext): string {
   return resolve(context.accountPaths.authDir, "imap-smtp.json");
 }
@@ -71,6 +143,77 @@ function requireSecurity(
   throw new SurfaceError("invalid_argument", `IMAP/SMTP auth login requires ${flag} as one of: tls, starttls, none.`, {
     account: account.name,
   });
+}
+
+function hasAnyServerSetting(options: AuthLoginOptions): boolean {
+  return Boolean(
+    options.imapHost
+      || options.imapPort
+      || options.imapSecurity
+      || options.smtpHost
+      || options.smtpPort
+      || options.smtpSecurity,
+  );
+}
+
+function hasAllServerSettings(options: AuthLoginOptions): boolean {
+  return Boolean(
+    options.imapHost
+      && options.imapPort
+      && options.imapSecurity
+      && options.smtpHost
+      && options.smtpPort
+      && options.smtpSecurity,
+  );
+}
+
+function explicitServerSettings(options: AuthLoginOptions, account: MailAccount): ImapSmtpServerSettings {
+  return {
+    imap: {
+      host: requireString(options, "imapHost", "--imap-host", account),
+      port: requirePort(options, "imapPort", "--imap-port", account),
+      security: requireSecurity(options, "imapSecurity", "--imap-security", account),
+    },
+    smtp: {
+      host: requireString(options, "smtpHost", "--smtp-host", account),
+      port: requirePort(options, "smtpPort", "--smtp-port", account),
+      security: requireSecurity(options, "smtpSecurity", "--smtp-security", account),
+    },
+  };
+}
+
+function resolveServerSettings(options: AuthLoginOptions, account: MailAccount): ImapSmtpServerSettings {
+  if (hasAnyServerSetting(options)) {
+    if (!hasAllServerSettings(options)) {
+      throw new SurfaceError(
+        "invalid_argument",
+        `IMAP/SMTP auth login requires either all server flags (${REQUIRED_SERVER_FLAGS}) or no server flags to use a preset.`,
+        { account: account.name },
+      );
+    }
+    return explicitServerSettings(options, account);
+  }
+
+  const username = options.username?.trim() || account.email;
+  const domain = mailboxDomain(username) ?? mailboxDomain(account.email);
+  if (!domain) {
+    throw new SurfaceError(
+      "invalid_argument",
+      `Could not infer IMAP/SMTP provider for account '${account.name}'. Provide ${REQUIRED_SERVER_FLAGS}.`,
+      { account: account.name },
+    );
+  }
+
+  const preset = IMAP_SMTP_PRESETS.find((candidate) => candidate.domains.includes(domain));
+  if (!preset) {
+    throw new SurfaceError(
+      "invalid_argument",
+      `No IMAP/SMTP preset for domain '${domain}'. Known preset domains: ${knownPresetDomains()}. Provide ${REQUIRED_SERVER_FLAGS}.`,
+      { account: account.name },
+    );
+  }
+
+  return cloneSettings(preset);
 }
 
 function readPasswordFromEnv(envName: string, account: MailAccount): string {
@@ -191,18 +334,11 @@ export function writeImapSmtpAuthState(
   context: ProviderContext,
   options: AuthLoginOptions,
 ): ImapSmtpAuthState {
+  const settings = resolveServerSettings(options, account);
   const state: ImapSmtpAuthState = {
     version: 1,
-    imap: {
-      host: requireString(options, "imapHost", "--imap-host", account),
-      port: requirePort(options, "imapPort", "--imap-port", account),
-      security: requireSecurity(options, "imapSecurity", "--imap-security", account),
-    },
-    smtp: {
-      host: requireString(options, "smtpHost", "--smtp-host", account),
-      port: requirePort(options, "smtpPort", "--smtp-port", account),
-      security: requireSecurity(options, "smtpSecurity", "--smtp-security", account),
-    },
+    imap: settings.imap,
+    smtp: settings.smtp,
     username: options.username?.trim() || account.email,
     password: resolvePassword(options, account),
     updated_at: nowIsoUtc(),
@@ -227,4 +363,5 @@ export function clearImapSmtpAuthState(context: ProviderContext): void {
 
 export const imapAuthTestHooks = {
   resolvePassword,
+  resolveServerSettings,
 };

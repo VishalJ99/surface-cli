@@ -95,6 +95,9 @@ IMAP/SMTP auth notes:
 - `surface auth login <account>` for `imap-smtp` stores server settings and the mailbox/app
   password under `~/.surface-cli/auth/<account_id>/imap-smtp.json`.
 - IMAP/SMTP accounts do not require a Google Cloud project or repo-root credentials JSON.
+- Surface can infer server settings for supported mailbox domains. Current presets:
+  - `gmx.com`: IMAP `imap.gmx.com:993 tls`, SMTP `mail.gmx.com:587 starttls`
+  - `gmx.net`: IMAP `imap.gmx.net:993 tls`, SMTP `mail.gmx.net:587 starttls`
 - IMAP/SMTP login accepts provider settings through these flags:
   - `--imap-host <host>`
   - `--imap-port <port>`
@@ -105,30 +108,23 @@ IMAP/SMTP auth notes:
   - `--username <username>`
   - exactly one password source: `--password <password>`, `--password-env <name>`,
     `--password-file <path>`, or `--password-command <command>`
+- Server flags are optional only when a preset can be inferred from `--username` or the account
+  email. If any server flag is provided, all server flags must be provided.
 - `--password <password>` treats the flag value as the mailbox/app password directly. It is
   supported for compatibility and controlled one-off use, but docs and agent workflows should
   prefer `--password-env`, `--password-file`, or `--password-command` because direct CLI passwords
   can leak through shell history, process listings, terminal logs, or agent transcripts.
+- Generic IMAP auth is username/password or app-password based. It does not run browser 2FA or
+  OAuth consent. Providers that require interactive OAuth need provider-specific support; providers
+  that enable 2FA for IMAP usually require an app-specific password.
 
 Example GMX-style IMAP/SMTP login:
 
 ```bash
-set -a
-. ~/.surface-cli/secrets/gmx.env
-set +a
-
 surface account add gmx_test --provider imap --email you@gmx.com
 surface auth login gmx_test \
-  --imap-host imap.gmx.com \
-  --imap-port 993 \
-  --imap-security tls \
-  --smtp-host mail.gmx.com \
-  --smtp-port 587 \
-  --smtp-security starttls \
   --username you@gmx.com \
-  --password-env SURFACE_GMX_PASSWORD
-
-unset SURFACE_GMX_PASSWORD
+  --password "$SURFACE_GMX_PASSWORD"
 ```
 
 Generic IMAP/SMTP threading notes:

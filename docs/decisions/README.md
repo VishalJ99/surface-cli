@@ -62,3 +62,5 @@ Use zero-padded sequential numbers:
 - `0038-bounded-unread-state-refresh.md`
 - `0039-sent-mail-is-message-first.md`
 - `0040-generic-imap-uses-imap-smtp-transport.md`
+- `0041-direct-send-supports-local-attachments.md`
+- `0042-imap-auth-uses-provider-presets.md`
