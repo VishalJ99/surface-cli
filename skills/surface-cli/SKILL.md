@@ -241,16 +241,21 @@ surface mail rsvp msg_01... --response accept
    `--name-alias` or `--email-alias` with `surface account identity set` when the mailbox address
    alone is not enough to identify the user in message bodies.
 4. For triage, prefer `fetch-unread` or `search` and inspect the returned thread/message refs.
-5. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
-6. For a thread watch, use `surface mail thread get <thread_ref> --refresh` and compare the newest
+5. For style matching before drafting, run
+   `surface mail sent --account <account> --recipient <email> --limit 3` and use the returned sent
+   messages as tone/context. When replying in an existing thread, prefer
+   `surface mail sent --account <account> --thread <thread_ref> --limit 3`; use recipient matching
+   as fallback if the thread has no sent examples.
+6. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
+7. For a thread watch, use `surface mail thread get <thread_ref> --refresh` and compare the newest
    message state against the stored prior observation before notifying.
-7. For a topic watch, start with `search` to set the baseline, then use `fetch-unread` for new
+8. For a topic watch, start with `search` to set the baseline, then use `fetch-unread` for new
    inbox arrivals plus targeted `search` when the watch has narrow filters.
-8. Read only the messages you need with `surface mail read <message_ref>`.
-9. For passive watching, do not mutate read state. If the user explicitly asks you to triage unread
+9. Read only the messages you need with `surface mail read <message_ref>`.
+10. For passive watching, do not mutate read state. If the user explicitly asks you to triage unread
    mail and write safety is enabled, marking handled messages read after reporting is acceptable
    unless the user asks to keep them unread.
-10. Act using refs from Surface output. Do not rely on array positions from previous JSON.
+11. Act using refs from Surface output. Do not rely on array positions from previous JSON.
 
 ## Important Rules
 
