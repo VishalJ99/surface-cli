@@ -181,6 +181,7 @@ Fetch unread threads:
 
 ```bash
 surface mail fetch-unread --account uni --limit 10
+surface mail sync-unread-state --account uni --limit 50
 ```
 
 Search with structured filters:
@@ -205,6 +206,7 @@ to follow-up read commands:
 ```bash
 surface session start --account uni
 surface mail fetch-unread --account uni --session sess_01... --limit 10
+surface mail sync-unread-state --account uni --session sess_01... --limit 50
 surface mail search --account uni --session sess_01... --text "exam board" --limit 10
 surface session stop sess_01...
 ```
@@ -238,6 +240,7 @@ surface auth status
 surface auth logout uni
 
 surface mail fetch-unread --account uni --limit 25
+surface mail sync-unread-state --account uni --limit 50
 surface mail search --account uni --text "project update" --limit 10
 surface mail thread get thr_01... --refresh
 surface mail read msg_01... --refresh
@@ -270,6 +273,7 @@ Surface v1 supports:
 - auth login/status/logout
 - account-owner identity for summaries
 - `search` and `fetch-unread`
+- bounded unread-state refresh with `sync-unread-state`
 - thread refresh and message read
 - attachment list/download
 - send/reply/reply-all/forward with `--draft`

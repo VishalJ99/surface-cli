@@ -56,6 +56,11 @@ export interface StoredSummaryRecord {
   fingerprint: string | null;
 }
 
+export interface StoredUnreadMessageCandidate {
+  message_ref: string;
+  thread_ref: string;
+}
+
 interface StoredAccountIdentityRecord {
   account_id: string;
   primary_email: string;
@@ -1560,6 +1565,62 @@ export class SurfaceDatabase {
     }
   }
 
+  listUnreadMessageCandidatesForAccount(accountId: string, limit: number): StoredUnreadMessageCandidate[] {
+    if (limit <= 0) {
+      return [];
+    }
+
+    return this.connection
+      .prepare(
+        `
+        SELECT message_ref, thread_ref
+        FROM messages
+        WHERE account_id = ?
+          AND unread = 1
+        ORDER BY
+          COALESCE(received_at, sent_at, last_synced_at, first_seen_at) DESC,
+          message_ref DESC
+        LIMIT ?
+        `,
+      )
+      .all(accountId, limit) as StoredUnreadMessageCandidate[];
+  }
+
+  clearUnreadForAccount(accountId: string): StoredUnreadMessageCandidate[] {
+    const cleared = this.connection
+      .prepare(
+        `
+        SELECT message_ref, thread_ref
+        FROM messages
+        WHERE account_id = ?
+          AND unread = 1
+        `,
+      )
+      .all(accountId) as StoredUnreadMessageCandidate[];
+
+    if (cleared.length === 0) {
+      return [];
+    }
+
+    this.connection
+      .prepare(
+        `
+        UPDATE messages
+        SET unread = 0,
+            last_synced_at = @last_synced_at
+        WHERE account_id = @account_id
+          AND unread = 1
+        `,
+      )
+      .run({
+        account_id: accountId,
+        last_synced_at: nowIsoUtc(),
+      });
+
+    this.recomputeThreadUnreadCounts(cleared.map((message) => message.thread_ref));
+    return cleared;
+  }
+
   recomputeThreadUnreadCounts(threadRefs: string[]): void {
     if (threadRefs.length === 0) {
       return;
@@ -1567,10 +1628,15 @@ export class SurfaceDatabase {
 
     const selectUnreadCount = this.connection.prepare(
       `
-      SELECT COUNT(*) AS unread_count
-      FROM messages
-      WHERE thread_ref = ?
-        AND unread = 1
+      SELECT
+        t.labels_json,
+        t.mailbox,
+        COUNT(m.message_ref) AS unread_count
+      FROM threads t
+      LEFT JOIN messages m ON m.thread_ref = t.thread_ref
+        AND m.unread = 1
+      WHERE t.thread_ref = ?
+      GROUP BY t.thread_ref
       `,
     );
     const updateThread = this.connection.prepare(
@@ -1585,12 +1651,22 @@ export class SurfaceDatabase {
     const lastSyncedAt = nowIsoUtc();
 
     for (const threadRef of new Set(threadRefs)) {
-      const row = selectUnreadCount.get(threadRef) as { unread_count: number };
+      const row = selectUnreadCount.get(threadRef) as
+        | { labels_json: string; mailbox: string | null; unread_count: number }
+        | undefined;
       const unreadCount = row?.unread_count ?? 0;
+      const labels = this.parseStringArray(row?.labels_json ?? "[]").filter((label) => label !== "unread");
+      if (unreadCount > 0 && !labels.includes("unread")) {
+        labels.push("unread");
+      }
+      if (labels.length === 0) {
+        labels.push(row?.mailbox ?? "inbox");
+      }
+
       updateThread.run({
         thread_ref: threadRef,
         unread_count: unreadCount,
-        labels_json: JSON.stringify(unreadCount > 0 ? ["inbox", "unread"] : ["inbox"]),
+        labels_json: JSON.stringify(labels),
         last_synced_at: lastSyncedAt,
       });
     }

@@ -78,6 +78,10 @@ interface MailProviderAdapter {
 
 The adapter returns normalized mail-domain objects, not provider-native payloads.
 
+`surface mail sync-unread-state` is intentionally a CLI/cache operation layered on the existing
+`fetchUnread` adapter method. Providers do not need a separate full-history unread sync hook for
+the bounded v1 command.
+
 ## Normalization Rules
 
 Provider-specific payloads must be mapped into:

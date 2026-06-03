@@ -117,6 +117,33 @@ export interface SearchResultEnvelope {
   threads: ThreadResult[];
 }
 
+export interface SyncUnreadStateResultEnvelope {
+  schema_version: "1";
+  command: "sync-unread-state";
+  generated_at: string;
+  account: string;
+  query: FetchUnreadQuery;
+  mode: "bounded" | "rebaseline";
+  status: {
+    partial: boolean;
+    truncated: boolean;
+    reason: "provider_returned_limit" | null;
+  };
+  sync: {
+    provider_returned_threads: number;
+    provider_unread_messages: number;
+    comparison_limit: number;
+    local_unread_candidates: number;
+    stale_cleared: number;
+    account_unread_cleared_before_fetch: number;
+  };
+  cleared: Array<{
+    message_ref: string;
+    thread_ref: string;
+  }>;
+  threads: ThreadResult[];
+}
+
 export interface ThreadGetResultEnvelope {
   schema_version: "1";
   command: "thread-get";

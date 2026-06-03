@@ -147,7 +147,7 @@ Warm session notes:
 
 - session ids are explicit and opt-in
 - v1 warm sessions are supported only for `outlook-web-playwright`
-- v1 session-aware commands are `search`, `fetch-unread`, `thread get --refresh`, and `read`
+- v1 session-aware commands are `search`, `fetch-unread`, `sync-unread-state`, `thread get --refresh`, and `read`
 - `read --mark-read` stays on the stateless path in v1
 
 Example session start result:
@@ -176,6 +176,7 @@ Example session start result:
 
 - `surface mail search --account <account> [--session <session_id>] [--text <query>] [--from <sender>] [--subject <subject>] [--mailbox <mailbox>] [--label <label>]...`
 - `surface mail fetch-unread --account <account> [--session <session_id>] ...`
+- `surface mail sync-unread-state --account <account> [--limit <limit>] [--session <session_id>] [--rebaseline]`
 - `surface mail thread get <thread_ref> [--refresh] [--session <session_id>]`
 - `surface mail read <message_ref> [--refresh] [--session <session_id>] [--mark-read]`
 - `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--draft]`
@@ -203,6 +204,7 @@ Example session start result:
 ## Naming Decisions
 
 - `fetch-unread` is the public command name.
+- `sync-unread-state` is the bounded cache refresh command for unread/read state.
 - Threads are the top-level result unit.
 - Messages are elements within a thread.
 - `thread get` should accept a stable `thread_ref`.
@@ -371,6 +373,62 @@ Recommended example:
       ]
     }
   ]
+}
+```
+
+### `surface mail sync-unread-state`
+
+Refresh local unread/read state from the provider without sweeping all history.
+
+Default behavior:
+
+- fetch current unread threads from the provider up to `limit`
+- persist the fetched threads and messages through the same path as `fetch-unread`
+- compare fetched unread messages against local unread message candidates for that account, bounded
+  to the same `limit` and ordered newest-first
+- clear local unread only for stale candidates inside that bounded comparison set
+
+With `--rebaseline`, Surface first clears all local unread flags for the account, then fetches and
+persists current provider unread up to `limit`. If the provider returns exactly `limit` threads,
+`status.partial` and `status.truncated` are true because unread state beyond that provider window
+may not be represented locally.
+
+`cleared` lists stale rows cleared by the bounded default comparison. Rebaseline clears are reported
+by count in `sync.account_unread_cleared_before_fetch` to avoid huge stdout payloads.
+
+Recommended example:
+
+```json
+{
+  "schema_version": "1",
+  "command": "sync-unread-state",
+  "generated_at": "2026-05-06T09:12:44Z",
+  "account": "work",
+  "query": {
+    "limit": 25,
+    "unread_only": true
+  },
+  "mode": "bounded",
+  "status": {
+    "partial": false,
+    "truncated": false,
+    "reason": null
+  },
+  "sync": {
+    "provider_returned_threads": 2,
+    "provider_unread_messages": 2,
+    "comparison_limit": 25,
+    "local_unread_candidates": 3,
+    "stale_cleared": 1,
+    "account_unread_cleared_before_fetch": 0
+  },
+  "cleared": [
+    {
+      "message_ref": "msg_01JQ6YH93Q2E6VYJ5H0Y3R6N9P",
+      "thread_ref": "thr_01JQ6YH6A6VX8P1TQ0N3K4W8M2"
+    }
+  ],
+  "threads": []
 }
 ```
 
