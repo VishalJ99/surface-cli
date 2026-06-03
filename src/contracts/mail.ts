@@ -213,6 +213,20 @@ export interface ComposeRecipients {
   bcc: MessageParticipant[];
 }
 
+export interface ComposeAttachmentInput {
+  path: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  content_base64: string;
+}
+
+export interface ComposeAttachmentMeta {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+}
+
 export interface SendMessageInput {
   to: string[];
   cc: string[];
@@ -220,6 +234,7 @@ export interface SendMessageInput {
   subject: string;
   body: string;
   draft: boolean;
+  attachments: ComposeAttachmentInput[];
 }
 
 export interface ReplyInput {
@@ -245,6 +260,7 @@ export interface SendResultEnvelope {
   status: "sent" | "drafted";
   subject: string;
   recipients: ComposeRecipients;
+  attachments: ComposeAttachmentMeta[];
   thread_ref: string | null;
   message_ref: string | null;
   in_reply_to_message_ref: string | null;

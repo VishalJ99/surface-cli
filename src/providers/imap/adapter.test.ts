@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import test from "node:test";
 
 import type { ListResponse } from "imapflow";
@@ -150,6 +151,35 @@ test("buildComposeRaw hides Bcc from delivery MIME while preserving it for store
   assert.doesNotMatch(raw.deliveryRaw, /^Bcc:/m);
   assert.match(raw.storedRaw, /^Date: /m);
   assert.match(raw.storedRaw, /^Bcc: hidden@example\.com/m);
+});
+
+test("buildComposeRaw includes attachments in both delivery and stored MIME copies", () => {
+  const raw = imapAdapterTestHooks.buildComposeRaw({
+    account: account(),
+    recipients: {
+      to: ["to@example.com"],
+      cc: [],
+      bcc: ["hidden@example.com"],
+    },
+    subject: "Surface attachment probe",
+    body: "Hello",
+    messageId: "<surface-test@example.com>",
+    attachments: [
+      {
+        path: "/tmp/report.txt",
+        filename: "report.txt",
+        mime_type: "text/plain",
+        size_bytes: 11,
+        content_base64: Buffer.from("hello file").toString("base64"),
+      },
+    ],
+  });
+
+  assert.match(raw.deliveryRaw, /^Content-Type: multipart\/mixed; boundary="surface-/m);
+  assert.match(raw.deliveryRaw, /Content-Disposition: attachment; filename="report\.txt"/);
+  assert.doesNotMatch(raw.deliveryRaw, /^Bcc:/m);
+  assert.match(raw.storedRaw, /^Bcc: hidden@example\.com/m);
+  assert.match(raw.storedRaw, /Content-Disposition: attachment; filename="report\.txt"/);
 });
 
 test("buildComposeRaw neutralizes bare CR and LF header injection", () => {

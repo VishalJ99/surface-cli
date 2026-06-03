@@ -232,6 +232,7 @@ surface attachment download msg_01... att_01...
 
 ```bash
 surface mail send --account personal_2 --to recipient@example.com --subject "Hello" --body "Test"
+surface mail send --account personal_2 --to recipient@example.com --subject "Hello" --body "Test" --attach ./briefing.txt
 surface mail send --account personal_2 --to recipient@example.com --subject "Hello" --body "Test" --draft
 surface mail reply msg_01... --body "Thanks"
 surface mail reply msg_01... --body "Thanks" --draft
@@ -291,16 +292,18 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 - watcher notifications should go to the user-requested destination; do not invent a session,
   channel, or DM target
 - `--draft` is the safe compose path when you do not need to send immediately.
+- direct `mail send` accepts repeatable `--attach <path>` flags; result JSON exposes attachment
+  metadata only, not local paths or file bytes
 
 ## Provider Notes
 
-- Gmail and Outlook both support read, search, unread fetch, attachments, send/reply/forward,
+- Gmail and Outlook both support read, search, unread fetch, attachments, send with `--attach`,
+  reply/reply-all/forward,
   archive, mark-read, mark-unread, RSVP, and `--draft`.
 - Generic IMAP/SMTP supports read, search, unread fetch, attachments, sent lookup,
-  send/reply/reply-all/forward, drafts, mark-read, and mark-unread. Archive works only when the
-  account exposes an Archive or All Mail style mailbox. RSVP is not supported for generic IMAP.
-- Public CLI send-with-attachment/upload flags are not supported yet. Receive-side attachment
-  list/download is supported.
+  send with `--attach`, reply/reply-all/forward, drafts, mark-read, and mark-unread. Archive works
+  only when the account exposes an Archive or All Mail style mailbox. RSVP is not supported for
+  generic IMAP.
 - Generic IMAP does not expose a reliable cross-folder conversation ID. Replies return the created
   Sent or Draft refs and include `in_reply_to_message_ref`; use `sent --recipient` or `sent
   --thread` for sent-message lookup.

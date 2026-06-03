@@ -33,5 +33,5 @@ including `In-Reply-To` and `References` headers derived from the original messa
 - Gmail compose stays fully API-driven and headless
 - `--draft` reuses the same compose path as live send with a different final disposition
 - forward creates a new thread by default rather than attaching to the original thread
-- the first Gmail v1 compose path is intentionally plain-text only; richer HTML compose and
-  attachment upload remain future work
+- the Gmail v1 compose body remains plain text; direct `send` attachment upload is covered by
+  ADR 0041, while richer HTML compose remains future work
