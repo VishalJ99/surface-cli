@@ -86,6 +86,14 @@ surface auth login gmx \
   --password-command "security find-generic-password -w -s surface-gmx"
 ```
 
+For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
+provider web settings before logging in. Generic IMAP login does not need a
+Google Cloud project, OAuth client JSON, Microsoft Graph app registration, or a
+browser session. It does need the provider's IMAP/SMTP settings and a mailbox or
+app password from a local secret source such as `--password-command`,
+`--password-env`, or `--password-file`. Do not ask the user to paste mailbox
+passwords into chat or store them in the repo.
+
 Local policy lives in:
 
 ```text
@@ -133,6 +141,7 @@ surface mail search --account uni --from registrar@school.edu --subject "waitlis
 surface mail search --account uni --session sess_01... --from registrar@school.edu --limit 10
 surface mail search --account personal_2 --mailbox inbox --label unread --text "sale" --limit 10
 surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
+surface mail search --account gmx --mailbox inbox --limit 10
 ```
 
 ### List Sent Messages
@@ -233,10 +242,10 @@ surface mail forward msg_01... --to recipient@example.com --body "FYI"
 ### Mailbox Actions
 
 ```bash
-surface mail archive msg_01...
+surface mail archive msg_01...                  # IMAP requires an Archive/All Mail mailbox
 surface mail mark-read msg_01...
 surface mail mark-unread msg_01...
-surface mail rsvp msg_01... --response accept
+surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP returns unsupported
 ```
 
 ## Workflow
@@ -273,6 +282,8 @@ surface mail rsvp msg_01... --response accept
 - `read` is cache-first by default. Use `--refresh` when you need live provider state.
 - the first session-backed Outlook query still pays mailbox setup cost; the main win is faster follow-on live reads in the same mailbox session
 - `read` does not download attachments. Use `surface attachment download`.
+- Generic IMAP reads raw MIME directly and does not need webmail "show images" or "trust sender"
+  UI. Remote images are not fetched; message body text, links, and MIME attachments still work.
 - `fetch-unread` and `search` do not mutate mailbox state.
 - passive watching should stay read-only; do not mark watched mail read unless the user explicitly asks
 - if the user asks for unread triage rather than passive watching, `mark-read` or `read --mark-read`
@@ -288,6 +299,8 @@ surface mail rsvp msg_01... --response accept
 - Generic IMAP/SMTP supports read, search, unread fetch, attachments, sent lookup,
   send/reply/reply-all/forward, drafts, mark-read, and mark-unread. Archive works only when the
   account exposes an Archive or All Mail style mailbox. RSVP is not supported for generic IMAP.
+- Public CLI send-with-attachment/upload flags are not supported yet. Receive-side attachment
+  list/download is supported.
 - Generic IMAP does not expose a reliable cross-folder conversation ID. Replies return the created
   Sent or Draft refs and include `in_reply_to_message_ref`; use `sent --recipient` or `sent
   --thread` for sent-message lookup.
