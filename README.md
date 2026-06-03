@@ -1,6 +1,6 @@
 # Surface CLI
 
-Outlook and Gmail from one local, JSON-first mail CLI.
+Gmail, Outlook, and generic IMAP from one local, JSON-first mail CLI.
 
 Surface solves the annoying mail automation case: you have a school or work
 Microsoft 365 account, IMAP is disabled, Graph app permissions need tenant admin
@@ -14,7 +14,7 @@ CLI for that mailbox.
 Surface is especially useful for coding agents and personal assistants because it
 keeps mail work compact:
 
-- one CLI contract for Gmail and Outlook
+- one CLI contract for Gmail, Outlook, and generic IMAP
 - multi-account support with stable account names
 - stable `thread_ref`, `message_ref`, `attachment_id`, and `session_id` values
 - thread-first `search` and `fetch-unread` results
@@ -30,7 +30,7 @@ Surface cannot override that policy.
 
 ## Fast Install
 
-Surface requires Node.js 20 or newer.
+Surface requires Node.js 20.19.0 or newer.
 
 Install the CLI first:
 
@@ -283,6 +283,7 @@ Surface v1 supports:
 
 - Gmail via Google APIs
 - Outlook via Outlook Web and Playwright
+- generic IMAP/SMTP for providers that expose mail server settings
 - account add/list/remove
 - auth login/status/logout
 - account-owner identity for summaries
