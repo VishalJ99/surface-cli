@@ -120,9 +120,10 @@ return account-authored sent messages from the normalized stored thread, optiona
 the recipient filter.
 
 `ProviderContext.authLoginOptions` carries provider-specific one-shot login settings collected by
-the CLI. In v1 this is used by `imap-smtp` for IMAP/SMTP host, port, security mode, username, and
-password source flags. Providers must store durable auth material under the account auth directory,
-not in the repo or local policy config.
+the CLI. In v1 this is used by `imap-smtp` for optional IMAP/SMTP host, port, security mode,
+username, and password source flags. `imap-smtp` may infer server settings from a supported mailbox
+domain preset when no server flags are supplied. Providers must store durable auth material under
+the account auth directory, not in the repo or local policy config.
 
 `SendMessageInput.attachments` carries files resolved by the CLI for direct `surface mail send`
 only. Each entry includes the local path for transports that need a browser upload, normalized

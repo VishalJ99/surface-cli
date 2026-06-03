@@ -125,8 +125,9 @@ client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE
 
 For generic IMAP/SMTP, `provider=imap` uses the provider's mail server settings
 directly. It does not need a Google Cloud project, OAuth client JSON, Microsoft
-Graph app registration, or browser automation. It does need IMAP settings, SMTP
-settings, a username, and a mailbox or app password.
+Graph app registration, or browser automation. For supported providers, Surface
+can infer the IMAP/SMTP settings from the mailbox domain. For custom providers,
+pass the server flags explicitly.
 
 The direct flag is `--password <password>`. For normal setup, prefer
 `--password-env`, `--password-file`, or `--password-command` so the actual
@@ -136,31 +137,25 @@ agent transcripts.
 GMX example:
 
 ```bash
-set -a
-. ~/.surface-cli/secrets/gmx.env
-set +a
-
 surface auth login gmx \
-  --imap-host imap.gmx.com --imap-port 993 --imap-security tls \
-  --smtp-host mail.gmx.com --smtp-port 587 --smtp-security starttls \
   --username you@gmx.com \
-  --password-env SURFACE_GMX_PASSWORD
+  --password "$SURFACE_GMX_PASSWORD"
 
 surface auth status gmx
-unset SURFACE_GMX_PASSWORD
 ```
 
-Where `~/.surface-cli/secrets/gmx.env` is a private file outside the repo, kept
-with permissions such as `chmod 600`, containing:
+Surface currently ships presets for GMX.com and GMX.net. For GMX, enable
+POP3/IMAP in GMX web settings before logging in. If two-factor authentication is
+enabled, use a GMX app-specific password; generic IMAP does not run browser
+2FA. If no preset exists for the mailbox domain, Surface will ask you to provide
+the IMAP/SMTP host, port, and security flags.
 
-```bash
-SURFACE_GMX_PASSWORD='your-mailbox-or-app-password'
-```
-
-For GMX, enable POP3/IMAP in GMX web settings before logging in. Prefer a
-password manager, env var, or private password file; do not put mailbox
+Prefer a password manager, env var, or private password file; do not put mailbox
 passwords in the repo or `config.toml`, and avoid typing real passwords directly
-with `--password` except for controlled one-off use.
+with `--password` except for controlled one-off use. Using
+`--password "$SURFACE_GMX_PASSWORD"` is shorter, but the expanded password is
+still passed as a command argument; `--password-env SURFACE_GMX_PASSWORD` avoids
+that.
 Surface reads MIME directly over IMAP, so it does not depend on webmail
 "show images" or "trust sender" UI. Remote images are not fetched; message body
 text, links, and MIME attachments can still be read and downloaded.
