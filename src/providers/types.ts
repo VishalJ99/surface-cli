@@ -26,11 +26,27 @@ export interface AuthStatus {
   detail?: string;
 }
 
+export type ImapSmtpSecurityMode = "tls" | "starttls" | "none";
+
+export interface AuthLoginOptions {
+  imapHost: string | undefined;
+  imapPort: number | undefined;
+  imapSecurity: ImapSmtpSecurityMode | undefined;
+  smtpHost: string | undefined;
+  smtpPort: number | undefined;
+  smtpSecurity: ImapSmtpSecurityMode | undefined;
+  username: string | undefined;
+  passwordEnv: string | undefined;
+  passwordFile: string | undefined;
+  passwordCommand: string | undefined;
+}
+
 export interface ProviderContext {
   config: SurfaceConfig;
   paths: SurfacePaths;
   accountPaths: AccountPaths;
   db: SurfaceDatabase;
+  authLoginOptions?: AuthLoginOptions;
 }
 
 export interface MailProviderAdapter {

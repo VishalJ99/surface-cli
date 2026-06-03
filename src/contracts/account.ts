@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const providerSchema = z.enum(["gmail", "outlook"]);
+export const providerSchema = z.enum(["gmail", "outlook", "imap"]);
 export type MailProvider = z.infer<typeof providerSchema>;
 
 export const accountInputSchema = z.object({

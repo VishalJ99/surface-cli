@@ -1,6 +1,6 @@
 ---
 name: surface-cli
-description: "Use the Surface mail CLI to read and act on Gmail and Outlook mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP or require admin setup, plus stable refs for unread fetch, sent-message lookup, structured search, thread refresh, message read, attachments, send or draft, archive, mark read or unread, and Outlook RSVP."
+description: "Use the Surface mail CLI to read and act on Gmail, Outlook, and generic IMAP/SMTP mail through one JSON-first contract. Prefer this skill when you need Outlook access for school or work accounts that do not expose IMAP, or generic IMAP for providers such as GMX, plus stable refs for unread fetch, sent-message lookup, structured search, thread refresh, message read, attachments, send or draft, archive, mark read or unread, and provider-supported RSVP."
 metadata:
   {
     "openclaw":
@@ -24,14 +24,14 @@ metadata:
 
 # Surface CLI
 
-Surface is a local-first mail CLI for Gmail and Outlook. It is especially useful for Outlook
-school or work accounts that only work through the web UI and do not require IMAP or admin
-changes. Surface prints machine-readable JSON to stdout and stores local state in
-`~/.surface-cli`.
+Surface is a local-first mail CLI for Gmail, Outlook, and generic IMAP/SMTP. It is especially
+useful for Outlook school or work accounts that only work through the web UI, and for mail
+providers such as GMX that expose standard IMAP and SMTP settings. Surface prints
+machine-readable JSON to stdout and stores local state in `~/.surface-cli`.
 
 ## Use This Skill When
 
-- the user wants to read or triage email from Gmail or Outlook
+- the user wants to read or triage email from Gmail, Outlook, or an IMAP mailbox
 - the user needs a provider-neutral CLI for search, unread fetch, read, attachments, or actions
 - you need stable `thread_ref` / `message_ref` values for follow-up commands or thread watching
 
@@ -63,6 +63,7 @@ Add an account:
 ```bash
 surface account add personal_2 --provider gmail --email you@example.com
 surface account add uni --provider outlook --email you@example.com
+surface account add gmx --provider imap --email you@gmx.com
 ```
 
 For reliable `summary.needs_action`, Surface should know who the account owner is. Gmail auth can
@@ -78,7 +79,20 @@ Log in:
 ```bash
 surface auth login personal_2
 surface auth login uni
+surface auth login gmx \
+  --imap-host imap.gmx.com --imap-port 993 --imap-security tls \
+  --smtp-host mail.gmx.com --smtp-port 587 --smtp-security starttls \
+  --username you@gmx.com \
+  --password-command "security find-generic-password -w -s surface-gmx"
 ```
+
+For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
+provider web settings before logging in. Generic IMAP login does not need a
+Google Cloud project, OAuth client JSON, Microsoft Graph app registration, or a
+browser session. It does need the provider's IMAP/SMTP settings and a mailbox or
+app password from a local secret source such as `--password-command`,
+`--password-env`, or `--password-file`. Do not ask the user to paste mailbox
+passwords into chat or store them in the repo.
 
 Local policy lives in:
 
@@ -127,6 +141,7 @@ surface mail search --account uni --from registrar@school.edu --subject "waitlis
 surface mail search --account uni --session sess_01... --from registrar@school.edu --limit 10
 surface mail search --account personal_2 --mailbox inbox --label unread --text "sale" --limit 10
 surface mail search --account personal_2 --text "has:attachment newer_than:30d" --limit 5
+surface mail search --account gmx --mailbox inbox --limit 10
 ```
 
 ### List Sent Messages
@@ -227,10 +242,10 @@ surface mail forward msg_01... --to recipient@example.com --body "FYI"
 ### Mailbox Actions
 
 ```bash
-surface mail archive msg_01...
+surface mail archive msg_01...                  # IMAP requires an Archive/All Mail mailbox
 surface mail mark-read msg_01...
 surface mail mark-unread msg_01...
-surface mail rsvp msg_01... --response accept
+surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP returns unsupported
 ```
 
 ## Workflow
@@ -267,6 +282,8 @@ surface mail rsvp msg_01... --response accept
 - `read` is cache-first by default. Use `--refresh` when you need live provider state.
 - the first session-backed Outlook query still pays mailbox setup cost; the main win is faster follow-on live reads in the same mailbox session
 - `read` does not download attachments. Use `surface attachment download`.
+- Generic IMAP reads raw MIME directly and does not need webmail "show images" or "trust sender"
+  UI. Remote images are not fetched; message body text, links, and MIME attachments still work.
 - `fetch-unread` and `search` do not mutate mailbox state.
 - passive watching should stay read-only; do not mark watched mail read unless the user explicitly asks
 - if the user asks for unread triage rather than passive watching, `mark-read` or `read --mark-read`
@@ -279,6 +296,14 @@ surface mail rsvp msg_01... --response accept
 
 - Gmail and Outlook both support read, search, unread fetch, attachments, send/reply/forward,
   archive, mark-read, mark-unread, RSVP, and `--draft`.
+- Generic IMAP/SMTP supports read, search, unread fetch, attachments, sent lookup,
+  send/reply/reply-all/forward, drafts, mark-read, and mark-unread. Archive works only when the
+  account exposes an Archive or All Mail style mailbox. RSVP is not supported for generic IMAP.
+- Public CLI send-with-attachment/upload flags are not supported yet. Receive-side attachment
+  list/download is supported.
+- Generic IMAP does not expose a reliable cross-folder conversation ID. Replies return the created
+  Sent or Draft refs and include `in_reply_to_message_ref`; use `sent --recipient` or `sent
+  --thread` for sent-message lookup.
 - Gmail RSVP requires Google Calendar API access on the authenticated account. If RSVP returns a
   reauth error, re-run `surface auth login <account>`.
 
@@ -295,8 +320,10 @@ surface mail rsvp msg_01... --response accept
 ```bash
 surface account list
 surface auth status
+surface auth status gmx
 surface session start --account uni
 surface mail fetch-unread --account uni --limit 10
+surface mail search --account gmx --mailbox inbox --limit 5
 surface mail fetch-unread --account uni --session sess_01... --limit 10
 surface mail search --account personal_2 --from alerts@example.com --subject 'discount' --mailbox inbox --label unread --limit 5
 surface mail thread get thr_01... --refresh --session sess_01...

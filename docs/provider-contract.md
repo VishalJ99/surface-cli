@@ -3,7 +3,7 @@
 ## Goal
 
 Define the normalized interface each provider transport must implement so Gmail,
-Outlook, and later providers can plug into the same CLI contract.
+Outlook, generic IMAP, and later providers can plug into the same CLI contract.
 
 ## Terminology
 
@@ -16,6 +16,7 @@ Examples:
 
 - `provider=gmail`, `transport=gmail-api`
 - `provider=outlook`, `transport=outlook-web-playwright`
+- `provider=imap`, `transport=imap-smtp`
 
 ## Requirements
 
@@ -38,42 +39,68 @@ Each provider implementation must support:
 - list attachments
 - download attachment
 
+New provider transports may land in staged milestones, but they must explicitly return
+machine-readable unsupported/not-implemented errors for unimplemented capabilities until they meet
+the full requirement set above.
+
 ## Required Adapter Interface
 
 Each provider transport should implement a shared adapter interface equivalent to:
 
 ```ts
 interface MailProviderAdapter {
-  readonly provider: "gmail" | "outlook";
+  readonly provider: "gmail" | "outlook" | "imap";
   readonly transport: string;
 
-  login(account: MailAccount): Promise<void>;
-  logout(account: MailAccount): Promise<void>;
-  authStatus(account: MailAccount): Promise<AuthStatus>;
+  login(account: MailAccount, context: ProviderContext): Promise<AuthStatus>;
+  logout(account: MailAccount, context: ProviderContext): Promise<AuthStatus>;
+  authStatus(account: MailAccount, context: ProviderContext): Promise<AuthStatus>;
 
-  search(account: MailAccount, query: SearchQuery): Promise<ThreadResult[]>;
-  fetchUnread(account: MailAccount, query: FetchUnreadQuery): Promise<ThreadResult[]>;
-  fetchSent(account: MailAccount, query: SentQuery): Promise<SentMessageResult[]>;
-  refreshThread(account: MailAccount, threadRef: string): Promise<void>;
-  readMessage(account: MailAccount, messageRef: string, refresh?: boolean): Promise<ReadResultEnvelope>;
-  sendMessage(account: MailAccount, input: SendMessageInput): Promise<SendResultEnvelope>;
-  reply(account: MailAccount, messageRef: string, input: ReplyInput): Promise<SendResultEnvelope>;
-  replyAll(account: MailAccount, messageRef: string, input: ReplyInput): Promise<SendResultEnvelope>;
-  forward(account: MailAccount, messageRef: string, input: ForwardInput): Promise<SendResultEnvelope>;
-  archive(account: MailAccount, messageRef: string): Promise<ArchiveResultEnvelope>;
-  markRead(account: MailAccount, messageRefs: string[]): Promise<MarkMessagesResultEnvelope>;
-  markUnread(account: MailAccount, messageRefs: string[]): Promise<MarkMessagesResultEnvelope>;
+  search(account: MailAccount, query: SearchQuery, context: ProviderContext): Promise<ThreadResult[]>;
+  fetchUnread(account: MailAccount, query: FetchUnreadQuery, context: ProviderContext): Promise<ThreadResult[]>;
+  fetchSent(account: MailAccount, query: SentQuery, context: ProviderContext): Promise<SentMessageResult[]>;
+  refreshThread(account: MailAccount, threadRef: string, context: ProviderContext): Promise<void>;
+  readMessage(
+    account: MailAccount,
+    messageRef: string,
+    refresh: boolean,
+    context: ProviderContext,
+  ): Promise<ReadResultEnvelope>;
+  sendMessage(account: MailAccount, input: SendMessageInput, context: ProviderContext): Promise<SendResultEnvelope>;
+  reply(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  replyAll(
+    account: MailAccount,
+    messageRef: string,
+    input: ReplyInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  forward(
+    account: MailAccount,
+    messageRef: string,
+    input: ForwardInput,
+    context: ProviderContext,
+  ): Promise<SendResultEnvelope>;
+  archive(account: MailAccount, messageRef: string, context: ProviderContext): Promise<ArchiveResultEnvelope>;
+  markRead(account: MailAccount, messageRefs: string[], context: ProviderContext): Promise<MarkMessagesResultEnvelope>;
+  markUnread(account: MailAccount, messageRefs: string[], context: ProviderContext): Promise<MarkMessagesResultEnvelope>;
   rsvp(
     account: MailAccount,
     messageRef: string,
     response: "accept" | "decline" | "tentative",
+    context: ProviderContext,
   ): Promise<RsvpResultEnvelope>;
 
-  listAttachments(account: MailAccount, messageRef: string): Promise<AttachmentListEnvelope>;
+  listAttachments(account: MailAccount, messageRef: string, context: ProviderContext): Promise<AttachmentListEnvelope>;
   downloadAttachment(
     account: MailAccount,
     messageRef: string,
     attachmentId: string,
+    context: ProviderContext,
   ): Promise<AttachmentDownloadEnvelope>;
 }
 ```
@@ -91,6 +118,11 @@ conversation/message state through the same normalized cache used by search/fetc
 `SentQuery.thread_ref` is present, providers should refresh that specific thread when possible and
 return account-authored sent messages from the normalized stored thread, optionally also applying
 the recipient filter.
+
+`ProviderContext.authLoginOptions` carries provider-specific one-shot login settings collected by
+the CLI. In v1 this is used by `imap-smtp` for IMAP/SMTP host, port, security mode, username, and
+password source flags. Providers must store durable auth material under the account auth directory,
+not in the repo or local policy config.
 
 ## Normalization Rules
 

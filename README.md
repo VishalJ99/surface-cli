@@ -1,6 +1,6 @@
 # Surface CLI
 
-Outlook and Gmail from one local, JSON-first mail CLI.
+Gmail, Outlook, and generic IMAP from one local, JSON-first mail CLI.
 
 Surface solves the annoying mail automation case: you have a school or work
 Microsoft 365 account, IMAP is disabled, Graph app permissions need tenant admin
@@ -14,7 +14,7 @@ CLI for that mailbox.
 Surface is especially useful for coding agents and personal assistants because it
 keeps mail work compact:
 
-- one CLI contract for Gmail and Outlook
+- one CLI contract for Gmail, Outlook, and generic IMAP
 - multi-account support with stable account names
 - stable `thread_ref`, `message_ref`, `attachment_id`, and `session_id` values
 - thread-first `search` and `fetch-unread` results
@@ -30,7 +30,7 @@ Surface cannot override that policy.
 
 ## Fast Install
 
-Surface requires Node.js 20 or newer.
+Surface requires Node.js 20.19.0 or newer.
 
 Install the CLI first:
 
@@ -93,6 +93,7 @@ Add the accounts you want Surface to manage:
 ```bash
 surface account add uni --provider outlook --email you@school.edu
 surface account add personal --provider gmail --email you@gmail.com
+surface account add gmx --provider imap --email you@gmx.com
 surface account list
 ```
 
@@ -121,6 +122,35 @@ complete your normal Microsoft sign-in flow.
 For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
 stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
 client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.
+
+For generic IMAP/SMTP, `provider=imap` uses the provider's mail server settings
+directly. It does not need a Google Cloud project, OAuth client JSON, Microsoft
+Graph app registration, or browser automation. It does need IMAP settings, SMTP
+settings, a username, and a mailbox or app password from a local secret source.
+
+GMX example:
+
+```bash
+surface auth login gmx \
+  --imap-host imap.gmx.com --imap-port 993 --imap-security tls \
+  --smtp-host mail.gmx.com --smtp-port 587 --smtp-security starttls \
+  --username you@gmx.com \
+  --password-command "security find-generic-password -w -s surface-gmx"
+
+surface auth status gmx
+```
+
+For GMX, enable POP3/IMAP in GMX web settings before logging in. Prefer a
+password manager, macOS Keychain, `--password-command`, `--password-env`, or
+`--password-file`; do not put mailbox passwords in the repo or `config.toml`.
+Surface reads MIME directly over IMAP, so it does not depend on webmail
+"show images" or "trust sender" UI. Remote images are not fetched; message body
+text, links, and MIME attachments can still be read and downloaded.
+
+Generic IMAP has no calendar action API. Calendar invites appear as ordinary
+message body plus `.ics`/calendar attachments, but `surface mail rsvp` remains
+unsupported for IMAP accounts. Archive also depends on the provider exposing an
+Archive or All Mail style mailbox.
 
 ## Headless Remote Setup
 
@@ -264,10 +294,10 @@ surface attachment download msg_01... att_01...
 
 surface mail send --account uni --to you@example.com --subject "hello" --body "test" --draft
 surface mail reply msg_01... --body "Thanks" --draft
-surface mail archive msg_01...
+surface mail archive msg_01...                 # when the provider exposes an archive mailbox
 surface mail mark-read msg_01...
 surface mail mark-unread msg_01...
-surface mail rsvp msg_01... --response tentative
+surface mail rsvp msg_01... --response tentative # Gmail/Outlook calendar invites only
 
 surface cache stats
 surface cache prune
@@ -283,6 +313,7 @@ Surface v1 supports:
 
 - Gmail via Google APIs
 - Outlook via Outlook Web and Playwright
+- generic IMAP/SMTP for providers that expose mail server settings
 - account add/list/remove
 - auth login/status/logout
 - account-owner identity for summaries
@@ -290,8 +321,9 @@ Surface v1 supports:
 - bounded unread-state refresh with `sync-unread-state`
 - thread refresh and message read
 - attachment list/download
-- send/reply/reply-all/forward with `--draft`
-- archive, mark-read, mark-unread, RSVP
+- send/reply/reply-all/forward, with `--draft` as the safe path
+- archive where provider folders allow it, mark-read, and mark-unread
+- RSVP for Gmail/Outlook calendar invites
 - Outlook warm sessions for repeated read-path commands
 - optional summaries through OpenRouter or OpenClaw
 
@@ -299,6 +331,8 @@ Intentionally incomplete:
 
 - draft lifecycle commands
 - move/delete
+- generic IMAP RSVP/calendar mutations
+- public send-with-attachment upload flags
 - broad automated live coverage beyond the opt-in Gmail and Outlook v1 e2e
   scripts
 
