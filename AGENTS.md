@@ -102,6 +102,12 @@ Do not leave important design decisions only in commits, Linear tickets, or chat
 - After a ClawHub publish, verify both:
   - `clawhub inspect surface-cli --json`
   - `clawhub inspect surface-cli --file SKILL.md`
+- When completing a new implementation that changes CLI behavior, do not stop at a local commit:
+  - sync `skills/surface-cli/SKILL.md` into the active Codex/OpenClaw skill copies when the skill text changed
+  - publish the updated skill to ClawHub and verify the published `SKILL.md`
+  - push the implementation branch to GitHub
+  - reinstall or refresh the `surface-cli` skill in OpenClaw, then verify `openclaw skills info surface-cli --json`
+  - give the user the exact npm publish command when the npm package has not been published by the agent
 
 ## ADR Rules
 
