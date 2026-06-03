@@ -234,7 +234,7 @@ Example session start result:
 - `surface mail sync-unread-state --account <account> [--limit <limit>] [--session <session_id>] [--rebaseline]`
 - `surface mail thread get <thread_ref> [--refresh] [--session <session_id>]`
 - `surface mail read <message_ref> [--refresh] [--session <session_id>] [--mark-read]`
-- `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--draft]`
+- `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--attach <path>]... [--draft]`
 - `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
 - `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
 - `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body> [--draft]`
@@ -836,7 +836,7 @@ Recommended example:
 }
 ```
 
-### `surface mail send --account <account> --to <email> --subject <subject> --body <body>`
+### `surface mail send --account <account> --to <email> --subject <subject> --body <body> [--attach <path>]...`
 
 Recommended example:
 
@@ -871,6 +871,13 @@ Recommended example:
       }
     ]
   },
+  "attachments": [
+    {
+      "filename": "briefing.txt",
+      "mime_type": "text/plain",
+      "size_bytes": 118
+    }
+  ],
   "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
   "message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ",
   "in_reply_to_message_ref": null
@@ -902,6 +909,7 @@ Recommended example:
     "cc": [],
     "bcc": []
   },
+  "attachments": [],
   "thread_ref": "thr_01DRAFTEXAMPLE000000000000",
   "message_ref": "msg_01DRAFTEXAMPLE000000000000",
   "in_reply_to_message_ref": null
@@ -933,6 +941,7 @@ Recommended example:
     "cc": [],
     "bcc": []
   },
+  "attachments": [],
   "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
   "message_ref": "msg_01KNA0EB3BADKWQVXFYKKK4BXN",
   "in_reply_to_message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ"
@@ -964,6 +973,7 @@ Recommended example:
     ],
     "bcc": []
   },
+  "attachments": [],
   "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
   "message_ref": "msg_01KNA0SHGG78SP6ZBXKPBHPTV0",
   "in_reply_to_message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ"
@@ -1005,6 +1015,7 @@ Recommended example:
       }
     ]
   },
+  "attachments": [],
   "thread_ref": "thr_01KNA0DABKTH156DG3WWAKX791",
   "message_ref": "msg_01KNA0TQXP9QCA0T4P48C3NG1G",
   "in_reply_to_message_ref": "msg_01KNA0DABPKVWT5W8A1NT443NZ"
@@ -1103,6 +1114,8 @@ payload is stale.
 - truncation should not be enforced in the first implementation slice; `truncated` should remain `false` until truncation logic is added
 - `archive` is supported in v1, but `delete` is not
 - `--draft` should return the same envelope shape as send-like commands, with `status = "drafted"`
+- `mail send --attach <path>` may be repeated; the CLI reads local files before provider dispatch, and
+  send result JSON exposes only attachment filename, MIME type, and size, not local paths or bytes
 
 ## Remaining Open Questions
 

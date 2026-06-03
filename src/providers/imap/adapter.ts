@@ -45,6 +45,10 @@ import type {
   SentQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
+import {
+  buildRawMimeMessage,
+  composeAttachmentMetas,
+} from "../../lib/compose-attachments.js";
 import { SurfaceError } from "../../lib/errors.js";
 import { toPublicSentMessage } from "../../lib/public-mail.js";
 import {
@@ -682,10 +686,6 @@ function normalizeEmailList(values: Array<string | null | undefined>): string[] 
   return [...deduped];
 }
 
-function sanitizeHeaderValue(value: string): string {
-  return value.replace(/[\r\n]+/g, " ").trim();
-}
-
 function prefixSubject(subject: string, prefix: "Re" | "Fwd"): string {
   const normalized = subject.trim();
   if (!normalized) {
@@ -738,43 +738,6 @@ function makeSmtpMessageId(account: MailAccount): string {
   return `<surface-${Date.now()}-${randomUUID()}@${domain}>`;
 }
 
-function rfc2822Date(value: Date = new Date()): string {
-  return value.toUTCString().replace("GMT", "+0000");
-}
-
-function buildRawMimeMessage(input: {
-  from: string;
-  to: string[];
-  cc: string[];
-  bcc: string[];
-  subject: string;
-  body: string;
-  messageId: string;
-  date?: string;
-  inReplyTo?: string | null | undefined;
-  includeBccHeader?: boolean;
-  references?: string | null | undefined;
-}): string {
-  const lines = [
-    `From: ${sanitizeHeaderValue(input.from)}`,
-    ...(input.to.length > 0 ? [`To: ${input.to.map(sanitizeHeaderValue).join(", ")}`] : []),
-    ...(input.cc.length > 0 ? [`Cc: ${input.cc.map(sanitizeHeaderValue).join(", ")}`] : []),
-    ...(input.includeBccHeader && input.bcc.length > 0 ? [`Bcc: ${input.bcc.map(sanitizeHeaderValue).join(", ")}`] : []),
-    `Subject: ${sanitizeHeaderValue(input.subject)}`,
-    `Message-ID: ${sanitizeHeaderValue(input.messageId)}`,
-    `Date: ${sanitizeHeaderValue(input.date ?? rfc2822Date())}`,
-    ...(input.inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(input.inReplyTo)}`] : []),
-    ...(input.references ? [`References: ${sanitizeHeaderValue(input.references)}`] : []),
-    "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 8bit",
-    "",
-    input.body.replace(/\r\n/g, "\n"),
-    "",
-  ];
-  return lines.join("\r\n");
-}
-
 function buildSendEnvelope(
   account: MailAccount,
   command: SendResultEnvelope["command"],
@@ -783,6 +746,7 @@ function buildSendEnvelope(
   recipients: ComposeRecipients,
   result: { thread_ref: string | null; message_ref: string | null },
   inReplyToMessageRef: string | null,
+  attachments: SendResultEnvelope["attachments"] = [],
 ): SendResultEnvelope {
   return {
     schema_version: "1",
@@ -792,6 +756,7 @@ function buildSendEnvelope(
     status,
     subject,
     recipients,
+    attachments,
     thread_ref: result.thread_ref,
     message_ref: result.message_ref,
     in_reply_to_message_ref: inReplyToMessageRef,
@@ -1416,6 +1381,7 @@ function buildComposeRaw(input: {
   messageId: string;
   inReplyTo?: string | null | undefined;
   references?: string | null | undefined;
+  attachments?: SendMessageInput["attachments"] | undefined;
 }): { deliveryRaw: string; storedRaw: string } {
   const base = {
     from: input.account.email,
@@ -1427,6 +1393,7 @@ function buildComposeRaw(input: {
     messageId: input.messageId,
     inReplyTo: input.inReplyTo,
     references: input.references,
+    attachments: input.attachments,
   };
   return {
     deliveryRaw: buildRawMimeMessage({ ...base, includeBccHeader: false }),
@@ -1462,6 +1429,7 @@ async function sendOrDraftImapSmtpMessage(input: {
   draft: boolean;
   inReplyTo?: string | null | undefined;
   references?: string | null | undefined;
+  attachments?: SendMessageInput["attachments"] | undefined;
 }): Promise<{ status: SendResultEnvelope["status"]; refs: { thread_ref: string | null; message_ref: string | null } }> {
   const messageId = makeSmtpMessageId(input.account);
   const raw = buildComposeRaw({
@@ -1472,6 +1440,7 @@ async function sendOrDraftImapSmtpMessage(input: {
     messageId,
     inReplyTo: input.inReplyTo,
     references: input.references,
+    attachments: input.attachments,
   });
 
   if (input.draft) {
@@ -1942,6 +1911,7 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
       subject,
       body: input.body,
       draft: input.draft,
+      attachments: input.attachments,
     });
 
     return buildSendEnvelope(
@@ -1952,6 +1922,7 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
       recipientsFromInput(recipients),
       result.refs,
       null,
+      composeAttachmentMetas(input.attachments),
     );
   }
 

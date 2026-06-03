@@ -124,6 +124,11 @@ the CLI. In v1 this is used by `imap-smtp` for IMAP/SMTP host, port, security mo
 password source flags. Providers must store durable auth material under the account auth directory,
 not in the repo or local policy config.
 
+`SendMessageInput.attachments` carries files resolved by the CLI for direct `surface mail send`
+only. Each entry includes the local path for transports that need a browser upload, normalized
+filename/MIME/size metadata, and base64 bytes for API or SMTP MIME composition. Providers must keep
+paths and bytes out of public result JSON; `SendResultEnvelope.attachments` exposes metadata only.
+
 ## Normalization Rules
 
 Provider-specific payloads must be mapped into:
@@ -176,6 +181,8 @@ Capabilities are account/transport-level. Message applicability should be derive
 ## Write Action Rules
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists
+- direct `send` supports repeatable local file attachments through `--attach`; reply/reply-all/forward
+  attachment upload remains deferred until those semantics are explicitly designed
 - `archive` is part of the supported v1 action set
 - read-state mutations such as `mark-read`, `mark-unread`, and `read --mark-read` are mailbox mutations
   and must stay behind explicit local write enablement and any configured account allowlist

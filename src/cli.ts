@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { accountIdentityInputSchema, accountInputSchema, providerSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
+import { resolveLocalComposeAttachments } from "./lib/compose-attachments.js";
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
 import { runRemoteAuthLogin } from "./lib/remote-auth.js";
@@ -839,6 +840,7 @@ mailCommand
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
   .requiredOption("--subject <subject>", "Message subject")
   .requiredOption("--body <body>", "Message body text")
+  .option("--attach <path>", "Local file path to attach; repeat for multiple files", collectStringOption, [])
   .option("--draft", "Save to drafts instead of sending", false)
   .action(async (options, command: Command) => {
     await runAccountAction(
@@ -856,6 +858,7 @@ mailCommand
               subject: options.subject,
               body: options.body,
               draft: Boolean(options.draft),
+              attachments: resolveLocalComposeAttachments(options.attach),
             },
             context,
           ),

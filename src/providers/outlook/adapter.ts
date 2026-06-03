@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 
 import type { MailAccount } from "../../contracts/account.js";
 import type {
@@ -29,6 +29,7 @@ import type {
   SentQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
+import { composeAttachmentMetas } from "../../lib/compose-attachments.js";
 import { SurfaceError } from "../../lib/errors.js";
 import { toPublicSentMessage } from "../../lib/public-mail.js";
 import {
@@ -1096,6 +1097,96 @@ async function fillComposeBody(page: Page, body: string): Promise<void> {
   }
 }
 
+async function firstVisibleLocator(candidates: Locator[]): Promise<Locator | null> {
+  for (const candidate of candidates) {
+    try {
+      if ((await candidate.count()) > 0 && await candidate.first().isVisible()) {
+        return candidate.first();
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function openOutlookAttachmentFileChooser(page: Page, account: MailAccount) {
+  const attachButton = await firstVisibleLocator([
+    page.getByRole("button", { name: /^Attach$/i }),
+    page.getByRole("button", { name: /attach file/i }),
+    page.locator('button[aria-label*="Attach"]').first(),
+  ]);
+  if (!attachButton) {
+    throw new SurfaceError("unsupported", "Outlook compose did not expose an attachment button.", {
+      account: account.name,
+    });
+  }
+
+  let chooserPromise = page.waitForEvent("filechooser", { timeout: 5_000 }).catch(() => null);
+  await attachButton.click();
+  let chooser = await chooserPromise;
+  if (chooser) {
+    return chooser;
+  }
+
+  const browseLocal = await firstVisibleLocator([
+    page.getByRole("menuitem", { name: /browse this computer/i }),
+    page.getByRole("menuitem", { name: /upload from this device/i }),
+    page.getByRole("menuitem", { name: /attach file/i }),
+    page.getByText(/browse this computer/i),
+    page.getByText(/upload from this device/i),
+  ]);
+  if (!browseLocal) {
+    throw new SurfaceError("unsupported", "Outlook compose did not expose a local-file attachment option.", {
+      account: account.name,
+    });
+  }
+
+  chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 }).catch(() => null);
+  await browseLocal.click();
+  chooser = await chooserPromise;
+  if (!chooser) {
+    throw new SurfaceError("unsupported", "Outlook compose did not open a file chooser for attachments.", {
+      account: account.name,
+    });
+  }
+  return chooser;
+}
+
+async function acceptOutlookAttachAsCopyIfPrompted(page: Page): Promise<void> {
+  await page.waitForTimeout(600);
+  const attachAsCopy = await firstVisibleLocator([
+    page.getByRole("menuitem", { name: /attach as a copy/i }),
+    page.getByRole("button", { name: /attach as a copy/i }),
+    page.getByText(/attach as a copy/i),
+  ]);
+  if (attachAsCopy) {
+    await attachAsCopy.click();
+    await page.waitForTimeout(600);
+  }
+}
+
+async function attachComposeFiles(
+  page: Page,
+  attachments: SendMessageInput["attachments"],
+  account: MailAccount,
+): Promise<void> {
+  for (const attachment of attachments) {
+    const chooser = await openOutlookAttachmentFileChooser(page, account);
+    await chooser.setFiles(attachment.path);
+    await acceptOutlookAttachAsCopyIfPrompted(page);
+    try {
+      await page.getByText(attachment.filename).first().waitFor({ timeout: 30_000 });
+    } catch {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook attachment '${attachment.filename}' did not finish uploading before send.`,
+        { account: account.name },
+      );
+    }
+  }
+}
+
 async function sendCurrentCompose(page: Page): Promise<void> {
   await page.locator('button[aria-label="Send"]').first().click();
   await page.waitForTimeout(4_000);
@@ -1196,6 +1287,7 @@ function buildSendEnvelope(
   recipients: ComposeRecipients,
   result: { thread_ref: string | null; message_ref: string | null },
   inReplyToMessageRef: string | null,
+  attachments: SendResultEnvelope["attachments"] = [],
 ): SendResultEnvelope {
   return {
     schema_version: "1",
@@ -1205,6 +1297,7 @@ function buildSendEnvelope(
     status,
     subject,
     recipients,
+    attachments,
     thread_ref: result.thread_ref,
     message_ref: result.message_ref,
     in_reply_to_message_ref: inReplyToMessageRef,
@@ -1894,6 +1987,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       subject: input.subject.trim(),
       body: input.body,
       draft: input.draft,
+      attachments: input.attachments,
     };
 
     if (normalizedInput.to.length === 0) {
@@ -1930,6 +2024,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await session.page.locator('input[aria-label="Subject"]').fill(normalizedInput.subject);
       await fillComposeBody(session.page, normalizedInput.body);
+      await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
@@ -1945,6 +2040,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       recipientsFromStored(resolved.stored ?? undefined, normalizedInput),
       resolved,
       null,
+      composeAttachmentMetas(normalizedInput.attachments),
     );
   }
 

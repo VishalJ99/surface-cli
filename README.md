@@ -310,7 +310,7 @@ surface mail read msg_01... --refresh
 surface attachment list msg_01...
 surface attachment download msg_01... att_01...
 
-surface mail send --account uni --to you@example.com --subject "hello" --body "test" --draft
+surface mail send --account uni --to you@example.com --subject "hello" --body "test" --attach ./briefing.txt --draft
 surface mail reply msg_01... --body "Thanks" --draft
 surface mail archive msg_01...                 # when the provider exposes an archive mailbox
 surface mail mark-read msg_01...
@@ -339,7 +339,7 @@ Surface v1 supports:
 - bounded unread-state refresh with `sync-unread-state`
 - thread refresh and message read
 - attachment list/download
-- send/reply/reply-all/forward, with `--draft` as the safe path
+- send with repeatable `--attach`, plus reply/reply-all/forward, with `--draft` as the safe path
 - archive where provider folders allow it, mark-read, and mark-unread
 - RSVP for Gmail/Outlook calendar invites
 - Outlook warm sessions for repeated read-path commands
@@ -350,7 +350,6 @@ Intentionally incomplete:
 - draft lifecycle commands
 - move/delete
 - generic IMAP RSVP/calendar mutations
-- public send-with-attachment upload flags
 - broad automated live coverage beyond the opt-in Gmail and Outlook v1 e2e
   scripts
 
