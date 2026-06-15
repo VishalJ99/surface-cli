@@ -193,7 +193,8 @@ Example remote remembered auth login result:
     "accounts": ["personal"],
     "auth_check_interval_seconds": 86400,
     "secret_storage": "Remote Surface auth storage; the remote project .env stores account/check settings only.",
-    "check_command": "ssh dross 'cd /Users/example/surface-cli && surface auth check --remembered-only --due-only --login-if-stale'"
+    "check_command": "ssh dross 'cd /Users/example/surface-cli && surface auth check --remembered-only --due-only'",
+    "reauth_command": "surface auth login personal --remote-host dross --remember-me --remote-project-dir /Users/example/surface-cli"
   }
 }
 ```

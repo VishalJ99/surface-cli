@@ -150,6 +150,9 @@ If a check reports `reauth_required = true`, run the returned `login_command` or
 `surface auth check <account> --login-if-stale` when you want Surface to start the normal provider
 login flow. OAuth consent, Microsoft sign-in/2FA, and missing IMAP password input still require the
 user or an approved local secret source.
+For remote accounts, use the returned `reauth_command` or rerun
+`surface auth login <account> --remote-host <host> --remember-me`; remote scheduler checks should
+stay probe-only.
 
 For generic IMAP/SMTP, `provider=imap` uses the provider's mail server settings
 directly. It does not need a Google Cloud project, OAuth client JSON, Microsoft

@@ -53,6 +53,7 @@ export interface RemoteAuthLoginEnvelope {
     auth_check_interval_seconds: number;
     secret_storage: string;
     check_command: string;
+    reauth_command: string;
   };
 }
 
@@ -113,6 +114,19 @@ async function runRemoteShell(remoteHost: string, command: string): Promise<{ st
     throw new SurfaceError(
       "remote_command_failed",
       `Remote command on '${remoteHost}' failed: ${failure.stderr?.trim() || failure.message}`,
+    );
+  }
+}
+
+async function assertRemoteProjectDirectory(remoteHost: string, directory: string): Promise<void> {
+  try {
+    await runRemoteShell(remoteHost, `test -d ${shellPath(directory)}`);
+  } catch (error) {
+    throw new SurfaceError(
+      "invalid_configuration",
+      error instanceof Error
+        ? `Remote project directory '${directory}' is not available on '${remoteHost}': ${error.message}`
+        : `Remote project directory '${directory}' is not available on '${remoteHost}'.`,
     );
   }
 }
@@ -244,7 +258,7 @@ process.stdout.write(JSON.stringify({
       `SURFACE_REMOTE_PROJECT_DIR=${shellEscape(options.remoteProjectDir)}`,
       `SURFACE_REMEMBER_ACCOUNT=${shellEscape(accountName)}`,
       `SURFACE_AUTH_CHECK_INTERVAL_SECONDS=${shellEscape(String(options.authCheckIntervalSeconds))}`,
-      `node -e ${shellEscape(script)}`,
+      `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH node -e ${shellEscape(script)}`,
     ].join(" "),
   );
 
@@ -257,9 +271,33 @@ process.stdout.write(JSON.stringify({
     ...parsed,
     secret_storage: "Remote Surface auth storage; the remote project .env stores account/check settings only.",
     check_command: `ssh ${shellEscape(remoteHost)} ${shellEscape(
-      `cd ${shellEscape(options.remoteProjectDir)} && surface auth check --remembered-only --due-only --login-if-stale`,
+      `cd ${shellEscape(options.remoteProjectDir)} && surface auth check --remembered-only --due-only`,
     )}`,
+    reauth_command: `surface auth login ${shellEscape(accountName)} --remote-host ${shellEscape(remoteHost)} --remember-me --remote-project-dir ${shellEscape(options.remoteProjectDir)}`,
   };
+}
+
+async function preflightRemoteRememberMe(
+  remoteHost: string,
+  accountName: string,
+  options: { remoteProjectDir: string },
+): Promise<void> {
+  await assertRemoteProjectDirectory(remoteHost, options.remoteProjectDir);
+  await runRemoteShell(
+    remoteHost,
+    [
+      `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH`,
+      `node -e ${shellEscape("process.exit(0)")}`,
+    ].join(" "),
+  ).catch((error) => {
+    throw new SurfaceError(
+      "invalid_configuration",
+      error instanceof Error
+        ? `Remote host '${remoteHost}' cannot run node for remembered-auth setup: ${error.message}`
+        : `Remote host '${remoteHost}' cannot run node for remembered-auth setup.`,
+      { account: accountName },
+    );
+  });
 }
 
 async function runRemoteSurfaceProcess(
@@ -762,6 +800,10 @@ export async function runRemoteAuthLogin(
     bestEffort: true,
   });
   await promptForRemoteReplacement(remoteHost, remoteAccount, remoteStatus);
+  const remoteProjectDir = options.remoteProjectDir ?? process.cwd();
+  if (options.rememberMe) {
+    await preflightRemoteRememberMe(remoteHost, accountName, { remoteProjectDir });
+  }
 
   let envelope: RemoteAuthLoginEnvelope;
   if (remoteAccount.provider === "gmail" && remoteAccount.transport === "gmail-api") {
@@ -778,7 +820,7 @@ export async function runRemoteAuthLogin(
 
   if (options.rememberMe) {
     envelope.remembered_auth = await rememberRemoteAuthAccount(remoteHost, accountName, {
-      remoteProjectDir: options.remoteProjectDir ?? process.cwd(),
+      remoteProjectDir,
       authCheckIntervalSeconds: context.config.authCheckIntervalSeconds,
     });
   }
