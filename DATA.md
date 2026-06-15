@@ -1,1 +1,3 @@
+- `.env` — Local-only dotenv file for Surface runtime overrides such as remembered-auth account names and auth-check cadence; may contain secrets and is ignored by git.
+- `.surface-cli/` — Optional project-local Surface state root when `SURFACE_CACHE_DIR` points inside the checkout; contains SQLite state, auth material, cache, downloads, and auth-check state; ignored by git.
 - `outputs/` — Local-only generated reports and benchmark artifacts. May contain private mailbox content; ignored by git and not suitable for repository commits.

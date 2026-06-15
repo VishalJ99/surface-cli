@@ -1,5 +1,7 @@
 node_modules/
 dist/
 .DS_Store
+.env
+.surface-cli/
 client_secret.json
 outputs/

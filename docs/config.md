@@ -13,6 +13,11 @@ Current expected precedence:
 3. config file
 4. built-in defaults
 
+At process startup Surface also loads a project-local `.env` file from the current working
+directory when present. Values already exported in the process environment win over `.env` values.
+The loader is scoped to Surface/OpenRouter keys and is intended for local automation, not committed
+repo state.
+
 ## Expected Config File
 
 Suggested default path:
@@ -43,6 +48,9 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
 - `provider_timeout_ms`
   Timeout budget for provider fetch operations.
   Default: `30000`
+- `auth_check_interval_seconds`
+  Default cadence for `surface auth check` next-check scheduling.
+  Default: `86400`
 
 ### Summarization
 
@@ -84,6 +92,8 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
 - `SURFACE_CACHE_DIR`
 - `SURFACE_DEFAULT_RESULT_LIMIT`
 - `SURFACE_PROVIDER_TIMEOUT_MS`
+- `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
+- `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
 - `SURFACE_SUMMARIZER_BACKEND`
 - `SURFACE_SUMMARIZER_MODEL`
 - `SURFACE_SUMMARY_INPUT_MAX_BYTES`
@@ -99,6 +109,21 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
 
 Secrets such as API keys should not be stored in the config file. They should live in
 environment variables or provider/account-specific auth storage.
+
+Remembered auth runtime requirements:
+
+- `surface auth login <account> --remember-me`
+  Records the account in project `.env` after a successful local login.
+- `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
+  Comma-separated account names used by `surface auth check --remembered-only`.
+- `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
+  Check cadence used when `surface auth check` is called without `--interval`.
+- The project `.env` file is ignored by git and may contain local-only settings. It should not be
+  used as the source of truth for raw OAuth tokens, Outlook browser cookies, or mailbox passwords.
+  Those remain in provider/account-specific auth storage.
+- If a local automation workflow intentionally wants all Surface state under the checkout, set
+  `SURFACE_CACHE_DIR` in `.env` to an ignored project-local directory such as
+  `/path/to/surface-cli/.surface-cli`.
 
 Summarizer backend runtime requirements:
 

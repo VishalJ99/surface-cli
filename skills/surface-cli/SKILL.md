@@ -46,6 +46,7 @@ Check setup:
 ```bash
 surface account list
 surface auth status
+surface auth check --remembered-only --due-only
 ```
 
 If the user asks to install the Surface skill for another agent on the same machine, use:
@@ -83,6 +84,11 @@ surface auth login gmx \
   --username you@gmx.com \
   --password "$SURFACE_GMX_PASSWORD"
 ```
+
+Use `surface auth login <account> --remember-me` when local automation should keep checking that
+account for stale auth. This records remembered-auth account names and check cadence in the project
+`.env`; raw provider tokens, Outlook profile cookies, and IMAP passwords remain in Surface auth
+storage. Use `surface auth check --remembered-only --due-only` from scheduled or watcher workflows.
 
 For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
 provider web settings before logging in. Generic IMAP login does not need a
@@ -256,7 +262,8 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 ## Workflow
 
 1. Start with `surface account list` if the target account is unclear.
-2. Use `surface auth status` before assuming a provider is ready.
+2. Use `surface auth status` before assuming a provider is ready, or
+   `surface auth check --remembered-only --due-only` for scheduled stale-auth monitoring.
 3. Use `surface account identity show <account>` if `summary.needs_action` looks wrong; add
    `--name-alias` or `--email-alias` with `surface account identity set` when the mailbox address
    alone is not enough to identify the user in message bodies.
@@ -327,6 +334,7 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 ```bash
 surface account list
 surface auth status
+surface auth check --remembered-only --due-only
 surface auth status gmx
 surface session start --account uni
 surface mail fetch-unread --account uni --limit 10

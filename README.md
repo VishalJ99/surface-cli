@@ -112,6 +112,7 @@ Log in:
 ```bash
 surface auth login uni
 surface auth status uni
+surface auth check uni
 ```
 
 Outlook auth opens Chrome and stores a dedicated browser profile under
@@ -122,6 +123,22 @@ complete your normal Microsoft sign-in flow.
 For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
 stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
 client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.
+
+Use `surface auth login <account> --remember-me` when repo-local automation should remember that an
+account needs stale-auth checks. This writes local metadata such as
+`SURFACE_REMEMBERED_AUTH_ACCOUNTS` and `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` to the project `.env`;
+raw provider tokens, browser cookies, and mailbox passwords stay in Surface auth storage.
+
+For scheduled checks, run:
+
+```bash
+surface auth check --remembered-only --due-only
+```
+
+If a check reports `reauth_required = true`, run the returned `login_command` or explicitly use
+`surface auth check <account> --login-if-stale` when you want Surface to start the normal provider
+login flow. OAuth consent, Microsoft sign-in/2FA, and missing IMAP password input still require the
+user or an approved local secret source.
 
 For generic IMAP/SMTP, `provider=imap` uses the provider's mail server settings
 directly. It does not need a Google Cloud project, OAuth client JSON, Microsoft
@@ -295,6 +312,7 @@ surface account list
 surface account identity show uni
 
 surface auth status
+surface auth check --remembered-only --due-only
 surface auth logout uni
 
 surface mail fetch-unread --account uni --limit 25
@@ -371,6 +389,11 @@ Surface stores local state under `~/.surface-cli`:
 `config.toml` stores local policy and preferences only. Account registry, auth
 material, cache metadata, and account-owner identity live in SQLite and auth
 storage, not in `config.toml`.
+
+When project-local automation is enabled, Surface also reads a local `.env` in
+the current working directory. `--remember-me` writes remembered-auth account
+names and check cadence there, but not raw provider secrets. The `.env` file and
+optional project-local `.surface-cli/` state directory are ignored by git.
 
 ## Contract Docs
 

@@ -64,3 +64,4 @@ Use zero-padded sequential numbers:
 - `0040-generic-imap-uses-imap-smtp-transport.md`
 - `0041-direct-send-supports-local-attachments.md`
 - `0042-imap-auth-uses-provider-presets.md`
+- `0043-remembered-auth-uses-project-dotenv.md`
