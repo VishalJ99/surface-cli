@@ -23,7 +23,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface account identity show <account>`
 - `surface account identity set <account> [--email <email>] [--name <name>] [--email-alias <email>]... [--name-alias <name>]... [--clear-email-aliases] [--clear-name-aliases]`
 - `surface account remove <account>`
-- `surface auth login <account> [--remember-me] [--remote-host <host>]`
+- `surface auth login <account> [--remember-me] [--remote-host <host>] [--remote-project-dir <path>]`
 - `surface auth status [account]`
 - `surface auth check [account] [--interval <seconds>] [--due-only] [--remembered-only] [--login-if-stale]`
 - `surface auth logout <account>`
@@ -77,8 +77,9 @@ Gmail auth notes:
 - Surface only loads `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, and
   `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` from project `.env`. Write-safety and summarizer settings
   must still come from the process environment or `config.toml`.
-- `--remember-me` is local-only and is rejected with `--remote-host` because remote auth state lives
-  on the remote host.
+- With `--remote-host`, `--remember-me` writes the remembered-auth metadata on the remote host after
+  remote auth succeeds. By default Surface writes to `.env` under the same path as the current local
+  working directory; use `--remote-project-dir <path>` when the remote checkout lives elsewhere.
 - Gmail RSVP also depends on Google Calendar scope. After enabling Calendar API for the same Google
   Cloud project, existing Gmail accounts must re-run `surface auth login <account>` once so
   Surface can store a token with Calendar access.
@@ -93,6 +94,8 @@ Gmail auth notes:
 - Remote auth login assumes the named account already exists on the remote host
 - Remote auth login only warns before replacement when the remote account currently reports
   `status = "authenticated"`
+- Remote `--remember-me` requires the chosen remote project directory to already exist; Surface does
+  not create arbitrary remote checkout directories.
 - Gmail auth resolves desktop OAuth credentials from:
   - `SURFACE_GMAIL_CLIENT_SECRET_FILE`
   - the stored per-account copy under `~/.surface-cli/auth/<account_id>/client_secret.json`
@@ -167,6 +170,30 @@ Example remote auth login result:
   "status": {
     "status": "authenticated",
     "detail": "Authenticated as you@example.com."
+  }
+}
+```
+
+Example remote remembered auth login result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "auth-login",
+  "account": "personal",
+  "provider": "gmail",
+  "transport": "gmail-api",
+  "remote_host": "dross",
+  "status": {
+    "status": "authenticated",
+    "detail": "Authenticated as you@example.com."
+  },
+  "remembered_auth": {
+    "env_path": "/Users/example/surface-cli/.env",
+    "accounts": ["personal"],
+    "auth_check_interval_seconds": 86400,
+    "secret_storage": "Remote Surface auth storage; the remote project .env stores account/check settings only.",
+    "check_command": "ssh dross 'cd /Users/example/surface-cli && surface auth check --remembered-only --due-only --login-if-stale'"
   }
 }
 ```

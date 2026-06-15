@@ -93,6 +93,10 @@ storage. Surface only auto-loads remembered-auth metadata and `SURFACE_CACHE_DIR
 `config.toml`. Use `surface auth check --remembered-only --due-only` from scheduled or watcher
 workflows.
 
+For remote auth, use `surface auth login <account> --remote-host <host> --remember-me` so the
+remembered-auth marker is written on the remote host after auth succeeds. Add
+`--remote-project-dir <path>` only when the remote checkout path differs from the local cwd.
+
 For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
 provider web settings before logging in. Generic IMAP login does not need a
 Google Cloud project, OAuth client JSON, Microsoft Graph app registration, or a

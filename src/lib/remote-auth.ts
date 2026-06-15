@@ -47,6 +47,13 @@ export interface RemoteAuthLoginEnvelope {
   transport: string;
   remote_host: string;
   status: AuthStatus;
+  remembered_auth?: {
+    env_path: string;
+    accounts: string[];
+    auth_check_interval_seconds: number;
+    secret_storage: string;
+    check_command: string;
+  };
 }
 
 function shellEscape(value: string): string {
@@ -108,6 +115,151 @@ async function runRemoteShell(remoteHost: string, command: string): Promise<{ st
       `Remote command on '${remoteHost}' failed: ${failure.stderr?.trim() || failure.message}`,
     );
   }
+}
+
+async function rememberRemoteAuthAccount(
+  remoteHost: string,
+  accountName: string,
+  options: { remoteProjectDir: string; authCheckIntervalSeconds: number },
+): Promise<NonNullable<RemoteAuthLoginEnvelope["remembered_auth"]>> {
+  const script = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+
+const projectDir = process.env.SURFACE_REMOTE_PROJECT_DIR;
+const accountName = process.env.SURFACE_REMEMBER_ACCOUNT;
+const fallbackInterval = Number.parseInt(process.env.SURFACE_AUTH_CHECK_INTERVAL_SECONDS || "86400", 10);
+
+if (!projectDir || !accountName) {
+  throw new Error("missing remote remembered-auth environment");
+}
+if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+  throw new Error("remote project directory does not exist: " + projectDir);
+}
+
+const envPath = path.join(projectDir, ".env");
+let text = "";
+try {
+  text = fs.readFileSync(envPath, "utf8");
+} catch (error) {
+  if (error.code !== "ENOENT") {
+    throw error;
+  }
+}
+
+function parseDotenv(rawText) {
+  const values = {};
+  for (const rawLine of rawText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const normalizedLine = line.startsWith("export ") ? line.slice("export ".length).trimStart() : line;
+    const separatorIndex = normalizedLine.indexOf("=");
+    if (separatorIndex <= 0) continue;
+    const key = normalizedLine.slice(0, separatorIndex).trim();
+    let value = normalizedLine.slice(separatorIndex + 1).trim();
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = JSON.parse(value);
+    } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+      value = value.slice(1, -1);
+    }
+    values[key] = value;
+  }
+  return values;
+}
+
+function rememberedAccounts(value) {
+  if (!value) return [];
+  const trimmed = value.trim();
+  const rawValues = trimmed.startsWith("[") ? JSON.parse(trimmed) : trimmed.split(",");
+  if (!Array.isArray(rawValues) || !rawValues.every((entry) => typeof entry === "string")) {
+    throw new Error("SURFACE_REMEMBERED_AUTH_ACCOUNTS must be a JSON array of account names");
+  }
+  const seen = new Set();
+  const accounts = [];
+  for (const rawAccount of rawValues) {
+    const account = rawAccount.trim();
+    if (!account || seen.has(account)) continue;
+    seen.add(account);
+    accounts.push(account);
+  }
+  return accounts;
+}
+
+function formatDotenvValue(value) {
+  return /^[A-Za-z0-9_./:@,+-]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+function upsertDotenv(rawText, values) {
+  const lines = rawText ? rawText.split(/\r?\n/) : [];
+  const consumed = new Set();
+  const updated = lines.map((line) => {
+    const normalizedLine = line.trimStart().startsWith("export ")
+      ? line.trimStart().slice("export ".length).trimStart()
+      : line.trimStart();
+    const separatorIndex = normalizedLine.indexOf("=");
+    const key = separatorIndex > 0 ? normalizedLine.slice(0, separatorIndex).trim() : "";
+    if (!Object.prototype.hasOwnProperty.call(values, key)) return line;
+    consumed.add(key);
+    return key + "=" + formatDotenvValue(values[key]);
+  });
+  const keysToAppend = Object.keys(values).filter((key) => !consumed.has(key));
+  if (keysToAppend.length > 0) {
+    if (updated.some((line) => line.trim().length > 0) && updated[updated.length - 1]?.trim() !== "") {
+      updated.push("");
+    }
+    updated.push("# Surface remembered auth settings");
+    for (const key of keysToAppend) {
+      updated.push(key + "=" + formatDotenvValue(values[key]));
+    }
+  }
+  return updated.join("\n").replace(/\n+$/g, "") + "\n";
+}
+
+const parsed = parseDotenv(text);
+const accounts = rememberedAccounts(parsed.SURFACE_REMEMBERED_AUTH_ACCOUNTS);
+if (!accounts.includes(accountName)) {
+  accounts.push(accountName);
+}
+const parsedInterval = Number.parseInt(parsed.SURFACE_AUTH_CHECK_INTERVAL_SECONDS || "", 10);
+const interval = Number.isSafeInteger(parsedInterval) && parsedInterval > 0
+  ? parsedInterval
+  : fallbackInterval;
+
+fs.writeFileSync(envPath, upsertDotenv(text, {
+  SURFACE_REMEMBERED_AUTH_ACCOUNTS: JSON.stringify(accounts),
+  SURFACE_AUTH_CHECK_INTERVAL_SECONDS: String(interval),
+}), { encoding: "utf8", mode: 0o600 });
+fs.chmodSync(envPath, 0o600);
+
+process.stdout.write(JSON.stringify({
+  env_path: envPath,
+  accounts,
+  auth_check_interval_seconds: interval,
+}) + "\n");
+`;
+
+  const result = await runRemoteShell(
+    remoteHost,
+    [
+      `SURFACE_REMOTE_PROJECT_DIR=${shellEscape(options.remoteProjectDir)}`,
+      `SURFACE_REMEMBER_ACCOUNT=${shellEscape(accountName)}`,
+      `SURFACE_AUTH_CHECK_INTERVAL_SECONDS=${shellEscape(String(options.authCheckIntervalSeconds))}`,
+      `node -e ${shellEscape(script)}`,
+    ].join(" "),
+  );
+
+  const parsed = JSON.parse(extractJsonEnvelope(result.stdout)) as {
+    env_path: string;
+    accounts: string[];
+    auth_check_interval_seconds: number;
+  };
+  return {
+    ...parsed,
+    secret_storage: "Remote Surface auth storage; the remote project .env stores account/check settings only.",
+    check_command: `ssh ${shellEscape(remoteHost)} ${shellEscape(
+      `cd ${shellEscape(options.remoteProjectDir)} && surface auth check --remembered-only --due-only --login-if-stale`,
+    )}`,
+  };
 }
 
 async function runRemoteSurfaceProcess(
@@ -602,6 +754,7 @@ export async function runRemoteAuthLogin(
   context: RuntimeContext,
   accountName: string,
   remoteHost: string,
+  options: { rememberMe?: boolean; remoteProjectDir?: string } = {},
 ): Promise<RemoteAuthLoginEnvelope> {
   const remoteAccount = await resolveRemoteAccount(remoteHost, accountName);
   const remoteStatus = await resolveRemoteAuthStatus(remoteHost, accountName, {
@@ -610,17 +763,25 @@ export async function runRemoteAuthLogin(
   });
   await promptForRemoteReplacement(remoteHost, remoteAccount, remoteStatus);
 
+  let envelope: RemoteAuthLoginEnvelope;
   if (remoteAccount.provider === "gmail" && remoteAccount.transport === "gmail-api") {
-    return await runRemoteGmailLogin(remoteHost, remoteAccount, context);
+    envelope = await runRemoteGmailLogin(remoteHost, remoteAccount, context);
+  } else if (remoteAccount.provider === "outlook" && remoteAccount.transport === "outlook-web-playwright") {
+    envelope = await runRemoteOutlookLogin(remoteHost, remoteAccount, context);
+  } else {
+    throw new SurfaceError(
+      "not_implemented",
+      `Remote auth login is not implemented for provider '${remoteAccount.provider}' and transport '${remoteAccount.transport}'.`,
+      { account: accountName },
+    );
   }
 
-  if (remoteAccount.provider === "outlook" && remoteAccount.transport === "outlook-web-playwright") {
-    return await runRemoteOutlookLogin(remoteHost, remoteAccount, context);
+  if (options.rememberMe) {
+    envelope.remembered_auth = await rememberRemoteAuthAccount(remoteHost, accountName, {
+      remoteProjectDir: options.remoteProjectDir ?? process.cwd(),
+      authCheckIntervalSeconds: context.config.authCheckIntervalSeconds,
+    });
   }
 
-  throw new SurfaceError(
-    "not_implemented",
-    `Remote auth login is not implemented for provider '${remoteAccount.provider}' and transport '${remoteAccount.transport}'.`,
-    { account: accountName },
-  );
+  return envelope;
 }

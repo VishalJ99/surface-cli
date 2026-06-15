@@ -529,6 +529,7 @@ authCommand
   .argument("<account>", "Logical account name")
   .option("--remember-me", "Record this account in the project .env for remembered auth checks")
   .option("--remote-host <host>", "Run auth login against an existing Surface account on a remote host")
+  .option("--remote-project-dir <path>", "Remote project directory where --remember-me writes .env")
   .option("--imap-host <host>", "IMAP server hostname for imap-smtp accounts")
   .addOption(new Option("--imap-port <port>", "IMAP server port for imap-smtp accounts").argParser(positiveInt))
   .option("--imap-security <mode>", "IMAP security mode: tls, starttls, or none")
@@ -542,17 +543,22 @@ authCommand
   .option("--password-command <command>", "Command that prints the mailbox or app password to stdout")
   .action(async (accountName: string, options, command: Command) => {
     if (options.remoteHost) {
-      if (options.rememberMe) {
-        throw new SurfaceError(
-          "invalid_argument",
-          "--remember-me is only supported for local auth login. Remote auth stores state on the remote host.",
-          { account: accountName },
-        );
-      }
       await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
-        writeJson(await runRemoteAuthLogin(context, accountName, options.remoteHost));
+        const remoteProjectDir = normalizeOptionalString(options.remoteProjectDir);
+        writeJson(await runRemoteAuthLogin(context, accountName, options.remoteHost, {
+          rememberMe: Boolean(options.rememberMe),
+          ...(remoteProjectDir ? { remoteProjectDir } : {}),
+        }));
       });
       return;
+    }
+
+    if (options.remoteProjectDir) {
+      throw new SurfaceError(
+        "invalid_argument",
+        "--remote-project-dir can only be used with --remote-host.",
+        { account: accountName },
+      );
     }
 
     await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {

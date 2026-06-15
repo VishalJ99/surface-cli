@@ -24,6 +24,8 @@ truth.
   summarizer settings remain explicit process-env or `config.toml` policy
 - expose `surface auth check --remembered-only --due-only` as the scheduler-friendly stale-auth
   probe
+- support `surface auth login <account> --remote-host <host> --remember-me` by writing the marker
+  in the remote project `.env` after remote auth succeeds
 
 ## Review Needed
 

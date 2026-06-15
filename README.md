@@ -130,6 +130,15 @@ account needs stale-auth checks. This writes local metadata such as
 raw provider tokens, browser cookies, and mailbox passwords stay in Surface auth storage.
 Surface only auto-loads remembered-auth metadata and `SURFACE_CACHE_DIR` from the project `.env`;
 write-safety and summarizer settings still come from the process environment or `config.toml`.
+For remote auth, combine the flags:
+
+```bash
+surface auth login <account> --remote-host <host> --remember-me
+```
+
+That completes auth on the remote host and writes the remembered-auth `.env` marker on the remote
+host too. Surface assumes the remote checkout path matches the current local working directory; add
+`--remote-project-dir <path>` if it differs.
 
 For scheduled checks, run:
 
@@ -218,6 +227,7 @@ ssh macmini 'surface account add uni --provider outlook --email you@school.edu'
 ssh macmini 'surface account identity set uni --email you@school.edu --name "Your Name"'
 
 surface auth login uni --remote-host macmini
+surface auth login uni --remote-host macmini --remember-me
 ssh macmini 'surface auth status uni'
 ```
 
@@ -229,6 +239,7 @@ Gmail uses the same public remote command:
 
 ```bash
 surface auth login personal --remote-host macmini
+surface auth login personal --remote-host macmini --remember-me
 ```
 
 For Gmail, Surface starts SSH port forwarding so the OAuth callback lands on the

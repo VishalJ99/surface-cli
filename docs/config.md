@@ -115,6 +115,10 @@ Remembered auth runtime requirements:
 
 - `surface auth login <account> --remember-me`
   Records the account in project `.env` after a successful local login.
+- `surface auth login <account> --remote-host <host> --remember-me`
+  Records remembered-auth metadata in the remote project `.env` after successful remote login. The
+  default remote project directory is the current local working directory path; use
+  `--remote-project-dir <path>` when the remote checkout lives elsewhere.
 - `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
   JSON array of account names used by `surface auth check --remembered-only`.
   Legacy comma-separated values are accepted for compatibility, but `--remember-me` writes JSON so
@@ -160,6 +164,7 @@ For headless remote setup, the expected pattern is:
 
 ```bash
 surface auth login <gmail-account> --remote-host <host>
+surface auth login <gmail-account> --remote-host <host> --remember-me
 ```
 
 Surface starts the SSH port-forward for you before the OAuth approval URL is printed.
@@ -171,6 +176,7 @@ For Outlook headless remote setup, use the same public command:
 
 ```bash
 surface auth login <outlook-account> --remote-host <host>
+surface auth login <outlook-account> --remote-host <host> --remember-me
 ```
 
 That path launches local Chrome in a dedicated Surface profile, waits for the user to finish

@@ -36,6 +36,11 @@ Surface only auto-loads `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`,
 `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` from the project `.env`. Write-safety settings, summarizer
 settings, and third-party API keys must still come from `config.toml` or the process environment.
 
+For `surface auth login <account> --remote-host <host> --remember-me`, Surface writes the
+remembered-auth metadata to the remote host after remote auth succeeds. The default remote project
+directory is the same path as the local current working directory, with `--remote-project-dir` as an
+override when the remote checkout path differs.
+
 Surface also exposes `surface auth check` as the low-frequency health check entrypoint. The command
 uses the existing provider auth probes, records the next due check in local Surface state, and
 reports whether re-login is required.
