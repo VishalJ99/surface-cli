@@ -66,7 +66,7 @@ function shellPath(value: string): string {
     return "$HOME";
   }
   if (value.startsWith("~/")) {
-    return `$HOME/${value.slice(2)}`;
+    return `$HOME/${shellEscape(value.slice(2))}`;
   }
   return shellEscape(value);
 }
