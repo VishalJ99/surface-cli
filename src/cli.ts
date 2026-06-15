@@ -49,8 +49,6 @@ import type { ImapSmtpSecurityMode } from "./providers/types.js";
 import type { MailAccount } from "./contracts/account.js";
 import type { AuthStatus } from "./providers/types.js";
 
-loadProjectDotenv();
-
 interface GlobalOptions {
   config?: string;
 }
@@ -274,7 +272,14 @@ async function runThreadAction(
 }
 
 function authLoginCommand(accountName: string): string {
-  return `surface auth login ${accountName}`;
+  return `surface auth login ${shellQuote(accountName)}`;
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function publicStatusFromRecord(record: ReturnType<typeof readAuthCheckState>["accounts"][string] | undefined): AuthStatus {
@@ -1332,7 +1337,12 @@ cacheCommand
     });
   });
 
-program.parseAsync(process.argv).catch((error: unknown) => {
+async function main(): Promise<void> {
+  loadProjectDotenv();
+  await program.parseAsync(process.argv);
+}
+
+main().catch((error: unknown) => {
   writeJson(errorToEnvelope(error));
   process.exitCode = 1;
 });

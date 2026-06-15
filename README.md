@@ -128,6 +128,8 @@ Use `surface auth login <account> --remember-me` when repo-local automation shou
 account needs stale-auth checks. This writes local metadata such as
 `SURFACE_REMEMBERED_AUTH_ACCOUNTS` and `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` to the project `.env`;
 raw provider tokens, browser cookies, and mailbox passwords stay in Surface auth storage.
+Surface only auto-loads remembered-auth metadata and `SURFACE_CACHE_DIR` from the project `.env`;
+write-safety and summarizer settings still come from the process environment or `config.toml`.
 
 For scheduled checks, run:
 
@@ -394,6 +396,8 @@ When project-local automation is enabled, Surface also reads a local `.env` in
 the current working directory. `--remember-me` writes remembered-auth account
 names and check cadence there, but not raw provider secrets. The `.env` file and
 optional project-local `.surface-cli/` state directory are ignored by git.
+Surface intentionally does not load write-safety or summarizer keys from project
+`.env`.
 
 ## Contract Docs
 

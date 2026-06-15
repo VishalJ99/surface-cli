@@ -1,9 +1,16 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import { SurfaceError } from "./errors.js";
+
 const DOTENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REMEMBERED_AUTH_ACCOUNTS_ENV = "SURFACE_REMEMBERED_AUTH_ACCOUNTS";
 const AUTH_CHECK_INTERVAL_ENV = "SURFACE_AUTH_CHECK_INTERVAL_SECONDS";
+const LOADABLE_DOTENV_KEYS = new Set([
+  "SURFACE_CACHE_DIR",
+  REMEMBERED_AUTH_ACCOUNTS_ENV,
+  AUTH_CHECK_INTERVAL_ENV,
+]);
 
 export interface DotenvLoadResult {
   path: string;
@@ -27,7 +34,7 @@ export function projectDotenvPath(cwd = process.cwd()): string {
 }
 
 function shouldLoadKey(key: string): boolean {
-  return key.startsWith("SURFACE_") || key === "OPENROUTER_API_KEY";
+  return LOADABLE_DOTENV_KEYS.has(key);
 }
 
 function stripInlineComment(value: string): string {
@@ -89,7 +96,15 @@ export function loadProjectDotenv(path = projectDotenvPath()): DotenvLoadResult 
     return { path, loaded: [] };
   }
 
-  const parsed = parseDotenv(readFileSync(path, "utf8"));
+  let parsed: Record<string, string>;
+  try {
+    parsed = parseDotenv(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new SurfaceError(
+      "invalid_configuration",
+      `Could not read project .env at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const loaded: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
     if (!shouldLoadKey(key) || process.env[key] !== undefined) {
@@ -112,9 +127,28 @@ export function parseRememberedAuthAccounts(value: string | undefined): string[]
   if (!value) {
     return [];
   }
+
+  const trimmedValue = value.trim();
+  if (trimmedValue.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmedValue) as unknown;
+      if (Array.isArray(parsed)) {
+        return dedupeRememberedAuthAccounts(
+          parsed.filter((entry): entry is string => typeof entry === "string"),
+        );
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  return dedupeRememberedAuthAccounts(value.split(","));
+}
+
+function dedupeRememberedAuthAccounts(values: string[]): string[] {
   const seen = new Set<string>();
   const accounts: string[] = [];
-  for (const rawAccount of value.split(",")) {
+  for (const rawAccount of values) {
     const account = rawAccount.trim();
     if (!account || seen.has(account)) {
       continue;
@@ -190,11 +224,11 @@ export function rememberAuthAccountInProjectEnv(
     : options.authCheckIntervalSeconds;
 
   upsertProjectDotenv(envPath, {
-    [REMEMBERED_AUTH_ACCOUNTS_ENV]: rememberedAccounts.join(","),
+    [REMEMBERED_AUTH_ACCOUNTS_ENV]: JSON.stringify(rememberedAccounts),
     [AUTH_CHECK_INTERVAL_ENV]: String(authCheckIntervalSeconds),
   });
 
-  process.env[REMEMBERED_AUTH_ACCOUNTS_ENV] = rememberedAccounts.join(",");
+  process.env[REMEMBERED_AUTH_ACCOUNTS_ENV] = JSON.stringify(rememberedAccounts);
   process.env[AUTH_CHECK_INTERVAL_ENV] = String(authCheckIntervalSeconds);
 
   return {

@@ -15,8 +15,9 @@ Current expected precedence:
 
 At process startup Surface also loads a project-local `.env` file from the current working
 directory when present. Values already exported in the process environment win over `.env` values.
-The loader is scoped to Surface/OpenRouter keys and is intended for local automation, not committed
-repo state.
+The loader is limited to `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, and
+`SURFACE_AUTH_CHECK_INTERVAL_SECONDS` so a checkout-local `.env` cannot silently enable writes,
+change summarizer backends, or provide third-party API keys.
 
 ## Expected Config File
 
@@ -115,7 +116,9 @@ Remembered auth runtime requirements:
 - `surface auth login <account> --remember-me`
   Records the account in project `.env` after a successful local login.
 - `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
-  Comma-separated account names used by `surface auth check --remembered-only`.
+  JSON array of account names used by `surface auth check --remembered-only`.
+  Legacy comma-separated values are accepted for compatibility, but `--remember-me` writes JSON so
+  account names containing spaces or commas round-trip correctly.
 - `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
   Check cadence used when `surface auth check` is called without `--interval`.
 - The project `.env` file is ignored by git and may contain local-only settings. It should not be

@@ -72,8 +72,11 @@ Gmail auth notes:
   `.env` after a successful local login. It does not write raw provider credentials to `.env`;
   provider auth material remains in Surface auth storage.
 - Remembered-auth `.env` keys:
-  - `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
+  - `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, written as a JSON array of account names
   - `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
+- Surface only loads `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, and
+  `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` from project `.env`. Write-safety and summarizer settings
+  must still come from the process environment or `config.toml`.
 - `--remember-me` is local-only and is rejected with `--remote-host` because remote auth state lives
   on the remote host.
 - Gmail RSVP also depends on Google Calendar scope. After enabling Calendar API for the same Google

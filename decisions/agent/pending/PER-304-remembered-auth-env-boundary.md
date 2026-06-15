@@ -15,10 +15,13 @@ truth.
 
 ## Implementation Direction
 
-- write `SURFACE_REMEMBERED_AUTH_ACCOUNTS` and `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` to `.env`
+- write `SURFACE_REMEMBERED_AUTH_ACCOUNTS` as a JSON array and
+  `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` to `.env`
 - keep provider tokens/profiles/password state in Surface auth storage
 - let advanced local users point `SURFACE_CACHE_DIR` at a project-local ignored directory when they
   intentionally want all Surface state local to the checkout
+- only auto-load those remembered-auth/local-state keys from project `.env`; write-safety and
+  summarizer settings remain explicit process-env or `config.toml` policy
 - expose `surface auth check --remembered-only --due-only` as the scheduler-friendly stale-auth
   probe
 

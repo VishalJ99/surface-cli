@@ -24,13 +24,17 @@ or a dotenv file would make accidental disclosure more likely and would conflict
 `surface auth login <account> --remember-me` records remembered-auth metadata in the current
 project `.env`:
 
-- `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
+- `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, written as a JSON array of account names
 - `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
 
 The `.env` file is local-only and ignored by git. The provider secrets remain in Surface auth
 storage. If the caller wants all Surface state, including auth material, under a project-local
 directory, they may set `SURFACE_CACHE_DIR` in `.env`, but `--remember-me` does not write raw
 credential values into `.env`.
+
+Surface only auto-loads `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, and
+`SURFACE_AUTH_CHECK_INTERVAL_SECONDS` from the project `.env`. Write-safety settings, summarizer
+settings, and third-party API keys must still come from `config.toml` or the process environment.
 
 Surface also exposes `surface auth check` as the low-frequency health check entrypoint. The command
 uses the existing provider auth probes, records the next due check in local Surface state, and
