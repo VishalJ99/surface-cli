@@ -22,6 +22,10 @@ import {
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
 import { runRemoteAuthLogin } from "./lib/remote-auth.js";
+import {
+  readRememberedAuthState,
+  rememberAuthAccountInState,
+} from "./lib/remembered-auth.js";
 import { loadStoredThread, threadHasReadableCache } from "./lib/stored-mail.js";
 import {
   expandSkillInstallTargets,
@@ -527,9 +531,8 @@ const authCommand = program.command("auth").description("Manage provider authent
 authCommand
   .command("login")
   .argument("<account>", "Logical account name")
-  .option("--remember-me", "Record this account in the project .env for remembered auth checks")
+  .option("--remember-me", "Record this account for remembered auth checks")
   .option("--remote-host <host>", "Run auth login against an existing Surface account on a remote host")
-  .option("--remote-project-dir <path>", "Remote project directory where --remember-me writes .env")
   .option("--imap-host <host>", "IMAP server hostname for imap-smtp accounts")
   .addOption(new Option("--imap-port <port>", "IMAP server port for imap-smtp accounts").argParser(positiveInt))
   .option("--imap-security <mode>", "IMAP security mode: tls, starttls, or none")
@@ -544,21 +547,11 @@ authCommand
   .action(async (accountName: string, options, command: Command) => {
     if (options.remoteHost) {
       await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
-        const remoteProjectDir = normalizeOptionalString(options.remoteProjectDir);
         writeJson(await runRemoteAuthLogin(context, accountName, options.remoteHost, {
           rememberMe: Boolean(options.rememberMe),
-          ...(remoteProjectDir ? { remoteProjectDir } : {}),
         }));
       });
       return;
-    }
-
-    if (options.remoteProjectDir) {
-      throw new SurfaceError(
-        "invalid_argument",
-        "--remote-project-dir can only be used with --remote-host.",
-        { account: accountName },
-      );
     }
 
     await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
@@ -579,9 +572,14 @@ authCommand
           passwordCommand: normalizeOptionalString(options.passwordCommand),
         },
       });
-      const rememberedAuth = options.rememberMe
-        ? rememberAuthAccountInProjectEnv(context.account.name, {
+      const rememberedState = options.rememberMe
+        ? rememberAuthAccountInState(context.paths.rootDir, context.account.name, {
           authCheckIntervalSeconds: context.config.authCheckIntervalSeconds,
+        })
+        : null;
+      const rememberedProjectEnv = options.rememberMe
+        ? rememberAuthAccountInProjectEnv(context.account.name, {
+          authCheckIntervalSeconds: rememberedState?.authCheckIntervalSeconds ?? context.config.authCheckIntervalSeconds,
         })
         : null;
       writeJson({
@@ -591,13 +589,14 @@ authCommand
         provider: context.account.provider,
         transport: context.account.transport,
         status,
-        ...(rememberedAuth
+        ...(rememberedState
           ? {
             remembered_auth: {
-              env_path: rememberedAuth.envPath,
-              accounts: rememberedAuth.rememberedAccounts,
-              auth_check_interval_seconds: rememberedAuth.authCheckIntervalSeconds,
-              secret_storage: "Surface auth storage; the project .env stores account/check settings only.",
+              state_path: rememberedState.statePath,
+              env_path: rememberedProjectEnv?.envPath,
+              accounts: rememberedState.rememberedAccounts,
+              auth_check_interval_seconds: rememberedState.authCheckIntervalSeconds,
+              secret_storage: "Surface auth storage; remembered auth state stores account/check settings only.",
             },
           }
           : {}),
@@ -667,8 +666,13 @@ authCommand
         );
       }
 
-      const rememberedAccounts = new Set(parseRememberedAuthAccounts(process.env.SURFACE_REMEMBERED_AUTH_ACCOUNTS));
-      const intervalSeconds = options.interval ?? context.config.authCheckIntervalSeconds;
+      const rememberedState = readRememberedAuthState(context.paths.rootDir, context.config.authCheckIntervalSeconds);
+      const rememberedAccounts = new Set([
+        ...rememberedState.accounts,
+        ...parseRememberedAuthAccounts(process.env.SURFACE_REMEMBERED_AUTH_ACCOUNTS),
+      ]);
+      const intervalSeconds = options.interval
+        ?? (options.rememberedOnly ? rememberedState.auth_check_interval_seconds : context.config.authCheckIntervalSeconds);
       const accounts = accountName
         ? [context.db.findAccountByName(accountName)].filter((account): account is MailAccount => Boolean(account))
         : context.db.listAccounts().filter((account) => !options.rememberedOnly || rememberedAccounts.has(account.name));

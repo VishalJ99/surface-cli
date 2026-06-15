@@ -68,6 +68,8 @@ SQLite should store enough information to resolve refs and power later commands:
 ~/.surface-cli/
   config.toml
   state.db
+  remembered-auth.json
+  auth-checks.json
   downloads/
     <account_id>/
       <message_ref>/
@@ -90,6 +92,11 @@ Use the directories this way:
 
 - `auth/`
   provider credentials or browser profiles
+- `remembered-auth.json`
+  local account names and check cadence for `surface auth check --remembered-only`; not raw
+  provider secrets
+- `auth-checks.json`
+  last/next auth-check results and due timestamps
 - `cache/`
   disposable local cache such as normalized message bodies
 - `downloads/`

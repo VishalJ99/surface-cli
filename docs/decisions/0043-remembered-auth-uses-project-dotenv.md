@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted
+Superseded by ADR 0044
+
+## Superseded Note
+
+ADR 0044 moves the primary remembered-auth marker to `remembered-auth.json` under the Surface
+state root. Project `.env` remains a local compatibility marker for repo-local automation, but
+remote remembered auth no longer writes to a checkout path or accepts `--remote-project-dir`.
 
 ## Context
 
@@ -36,10 +42,9 @@ Surface only auto-loads `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`,
 `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` from the project `.env`. Write-safety settings, summarizer
 settings, and third-party API keys must still come from `config.toml` or the process environment.
 
-For `surface auth login <account> --remote-host <host> --remember-me`, Surface writes the
-remembered-auth metadata to the remote host after remote auth succeeds. The default remote project
-directory is the same path as the local current working directory, with `--remote-project-dir` as an
-override when the remote checkout path differs.
+This ADR originally also applied the dotenv marker to remote remembered auth. ADR 0044 replaces
+that remote behavior with Surface state-root storage so remote auth no longer depends on a checkout
+path.
 
 Surface also exposes `surface auth check` as the low-frequency health check entrypoint. The command
 uses the existing provider auth probes, records the next due check in local Surface state, and

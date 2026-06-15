@@ -124,21 +124,22 @@ For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
 stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
 client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.
 
-Use `surface auth login <account> --remember-me` when repo-local automation should remember that an
-account needs stale-auth checks. This writes local metadata such as
-`SURFACE_REMEMBERED_AUTH_ACCOUNTS` and `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` to the project `.env`;
-raw provider tokens, browser cookies, and mailbox passwords stay in Surface auth storage.
-Surface only auto-loads remembered-auth metadata and `SURFACE_CACHE_DIR` from the project `.env`;
-write-safety and summarizer settings still come from the process environment or `config.toml`.
+Use `surface auth login <account> --remember-me` when automation should remember that an account
+needs stale-auth checks. This writes local metadata such as the account list and check cadence to
+`remembered-auth.json` under the Surface state root. Local logins also keep the project `.env`
+marker updated for existing repo-local automation. Raw provider tokens, browser cookies, and mailbox
+passwords stay in Surface auth storage.
+Surface only auto-loads remembered-auth compatibility metadata and `SURFACE_CACHE_DIR` from the
+project `.env`; write-safety and summarizer settings still come from the process environment or
+`config.toml`.
 For remote auth, combine the flags:
 
 ```bash
 surface auth login <account> --remote-host <host> --remember-me
 ```
 
-That completes auth on the remote host and writes the remembered-auth `.env` marker on the remote
-host too. Surface assumes the remote checkout path matches the current local working directory; add
-`--remote-project-dir <path>` if it differs.
+That completes auth on the remote host and writes the remembered-auth marker to the remote host's
+Surface state root too. No remote project directory is required.
 
 For scheduled checks, run:
 
@@ -229,7 +230,6 @@ Outlook remote setup:
 ssh macmini 'surface account add uni --provider outlook --email you@school.edu'
 ssh macmini 'surface account identity set uni --email you@school.edu --name "Your Name"'
 
-surface auth login uni --remote-host macmini
 surface auth login uni --remote-host macmini --remember-me
 ssh macmini 'surface auth status uni'
 ```
@@ -241,7 +241,6 @@ host, then validates it there.
 Gmail uses the same public remote command:
 
 ```bash
-surface auth login personal --remote-host macmini
 surface auth login personal --remote-host macmini --remember-me
 ```
 
@@ -407,11 +406,11 @@ material, cache metadata, and account-owner identity live in SQLite and auth
 storage, not in `config.toml`.
 
 When project-local automation is enabled, Surface also reads a local `.env` in
-the current working directory. `--remember-me` writes remembered-auth account
-names and check cadence there, but not raw provider secrets. The `.env` file and
-optional project-local `.surface-cli/` state directory are ignored by git.
-Surface intentionally does not load write-safety or summarizer keys from project
-`.env`.
+the current working directory for compatibility remembered-auth account names,
+check cadence, and `SURFACE_CACHE_DIR`, but not raw provider secrets. The `.env`
+file and optional project-local `.surface-cli/` state directory are ignored by
+git. Surface intentionally does not load write-safety or summarizer keys from
+project `.env`.
 
 ## Contract Docs
 

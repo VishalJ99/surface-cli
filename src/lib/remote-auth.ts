@@ -7,8 +7,6 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
 import { promisify } from "node:util";
 
-import { parse as parseToml } from "smol-toml";
-
 import type { MailAccount } from "../contracts/account.js";
 import type { AuthStatus } from "../providers/types.js";
 import type { RuntimeContext } from "../runtime.js";
@@ -39,6 +37,10 @@ interface RemoteAuthStatusEnvelope {
   status: AuthStatus;
 }
 
+interface RemoteCacheStatsEnvelope {
+  cache_root: string;
+}
+
 export interface RemoteAuthLoginEnvelope {
   schema_version: "1";
   command: "auth-login";
@@ -48,7 +50,7 @@ export interface RemoteAuthLoginEnvelope {
   remote_host: string;
   status: AuthStatus;
   remembered_auth?: {
-    env_path: string;
+    state_path: string;
     accounts: string[];
     auth_check_interval_seconds: number;
     secret_storage: string;
@@ -69,6 +71,10 @@ function shellPath(value: string): string {
     return `$HOME/${shellEscape(value.slice(2))}`;
   }
   return shellEscape(value);
+}
+
+function joinRemotePath(root: string, name: string): string {
+  return `${root.replace(/\/+$/g, "")}/${name}`;
 }
 
 function remoteLoginShellWrapper(command: string): string {
@@ -118,144 +124,86 @@ async function runRemoteShell(remoteHost: string, command: string): Promise<{ st
   }
 }
 
-async function assertRemoteProjectDirectory(remoteHost: string, directory: string): Promise<void> {
-  try {
-    await runRemoteShell(remoteHost, `test -d ${shellPath(directory)}`);
-  } catch (error) {
-    throw new SurfaceError(
-      "invalid_configuration",
-      error instanceof Error
-        ? `Remote project directory '${directory}' is not available on '${remoteHost}': ${error.message}`
-        : `Remote project directory '${directory}' is not available on '${remoteHost}'.`,
-    );
-  }
-}
-
 async function rememberRemoteAuthAccount(
   remoteHost: string,
   accountName: string,
-  options: { remoteProjectDir: string; authCheckIntervalSeconds: number },
+  options: { stateRoot: string; statePath: string; authCheckIntervalSeconds: number },
 ): Promise<NonNullable<RemoteAuthLoginEnvelope["remembered_auth"]>> {
   const script = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 
-const projectDir = process.env.SURFACE_REMOTE_PROJECT_DIR;
+const statePath = process.env.SURFACE_REMEMBERED_AUTH_PATH;
 const accountName = process.env.SURFACE_REMEMBER_ACCOUNT;
 const fallbackInterval = Number.parseInt(process.env.SURFACE_AUTH_CHECK_INTERVAL_SECONDS || "86400", 10);
 
-if (!projectDir || !accountName) {
+if (!statePath || !accountName) {
   throw new Error("missing remote remembered-auth environment");
 }
-if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
-  throw new Error("remote project directory does not exist: " + projectDir);
+
+function emptyState() {
+  return {
+    version: 1,
+    accounts: [],
+    auth_check_interval_seconds: Number.isSafeInteger(fallbackInterval) && fallbackInterval > 0
+      ? fallbackInterval
+      : 86400,
+  };
 }
 
-const envPath = path.join(projectDir, ".env");
-let text = "";
-try {
-  text = fs.readFileSync(envPath, "utf8");
-} catch (error) {
-  if (error.code !== "ENOENT") {
-    throw error;
+function normalizeState(value) {
+  if (!value || typeof value !== "object" || value.version !== 1) {
+    throw new Error("remembered-auth state has an unsupported shape");
   }
-}
-
-function parseDotenv(rawText) {
-  const values = {};
-  for (const rawLine of rawText.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const normalizedLine = line.startsWith("export ") ? line.slice("export ".length).trimStart() : line;
-    const separatorIndex = normalizedLine.indexOf("=");
-    if (separatorIndex <= 0) continue;
-    const key = normalizedLine.slice(0, separatorIndex).trim();
-    let value = normalizedLine.slice(separatorIndex + 1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-      value = JSON.parse(value);
-    } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
-      value = value.slice(1, -1);
-    }
-    values[key] = value;
+  if (!Array.isArray(value.accounts) || !value.accounts.every((entry) => typeof entry === "string")) {
+    throw new Error("remembered-auth accounts must be strings");
   }
-  return values;
-}
-
-function rememberedAccounts(value) {
-  if (!value) return [];
-  const trimmed = value.trim();
-  const rawValues = trimmed.startsWith("[") ? JSON.parse(trimmed) : trimmed.split(",");
-  if (!Array.isArray(rawValues) || !rawValues.every((entry) => typeof entry === "string")) {
-    throw new Error("SURFACE_REMEMBERED_AUTH_ACCOUNTS must be a JSON array of account names");
+  if (!Number.isSafeInteger(value.auth_check_interval_seconds) || value.auth_check_interval_seconds <= 0) {
+    throw new Error("remembered-auth interval must be a positive integer");
   }
   const seen = new Set();
   const accounts = [];
-  for (const rawAccount of rawValues) {
+  for (const rawAccount of value.accounts) {
     const account = rawAccount.trim();
     if (!account || seen.has(account)) continue;
     seen.add(account);
     accounts.push(account);
   }
-  return accounts;
+  return {
+    version: 1,
+    accounts,
+    auth_check_interval_seconds: value.auth_check_interval_seconds,
+  };
 }
 
-function formatDotenvValue(value) {
-  return /^[A-Za-z0-9_./:@,+-]+$/.test(value) ? value : JSON.stringify(value);
-}
-
-function upsertDotenv(rawText, values) {
-  const lines = rawText ? rawText.split(/\r?\n/) : [];
-  const consumed = new Set();
-  const updated = lines.map((line) => {
-    const normalizedLine = line.trimStart().startsWith("export ")
-      ? line.trimStart().slice("export ".length).trimStart()
-      : line.trimStart();
-    const separatorIndex = normalizedLine.indexOf("=");
-    const key = separatorIndex > 0 ? normalizedLine.slice(0, separatorIndex).trim() : "";
-    if (!Object.prototype.hasOwnProperty.call(values, key)) return line;
-    consumed.add(key);
-    return key + "=" + formatDotenvValue(values[key]);
-  });
-  const keysToAppend = Object.keys(values).filter((key) => !consumed.has(key));
-  if (keysToAppend.length > 0) {
-    if (updated.some((line) => line.trim().length > 0) && updated[updated.length - 1]?.trim() !== "") {
-      updated.push("");
-    }
-    updated.push("# Surface remembered auth settings");
-    for (const key of keysToAppend) {
-      updated.push(key + "=" + formatDotenvValue(values[key]));
-    }
+let state = emptyState();
+try {
+  state = normalizeState(JSON.parse(fs.readFileSync(statePath, "utf8")));
+} catch (error) {
+  if (!error || typeof error !== "object" || error.code !== "ENOENT") {
+    throw error;
   }
-  return updated.join("\n").replace(/\n+$/g, "") + "\n";
 }
 
-const parsed = parseDotenv(text);
-const accounts = rememberedAccounts(parsed.SURFACE_REMEMBERED_AUTH_ACCOUNTS);
-if (!accounts.includes(accountName)) {
-  accounts.push(accountName);
+if (!state.accounts.includes(accountName)) {
+  state.accounts.push(accountName);
 }
-const parsedInterval = Number.parseInt(parsed.SURFACE_AUTH_CHECK_INTERVAL_SECONDS || "", 10);
-const interval = Number.isSafeInteger(parsedInterval) && parsedInterval > 0
-  ? parsedInterval
-  : fallbackInterval;
 
-fs.writeFileSync(envPath, upsertDotenv(text, {
-  SURFACE_REMEMBERED_AUTH_ACCOUNTS: JSON.stringify(accounts),
-  SURFACE_AUTH_CHECK_INTERVAL_SECONDS: String(interval),
-}), { encoding: "utf8", mode: 0o600 });
-fs.chmodSync(envPath, 0o600);
+fs.mkdirSync(path.dirname(statePath), { recursive: true });
+fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+fs.chmodSync(statePath, 0o600);
 
 process.stdout.write(JSON.stringify({
-  env_path: envPath,
-  accounts,
-  auth_check_interval_seconds: interval,
+  state_path: statePath,
+  accounts: state.accounts,
+  auth_check_interval_seconds: state.auth_check_interval_seconds,
 }) + "\n");
 `;
 
   const result = await runRemoteShell(
     remoteHost,
     [
-      `SURFACE_REMOTE_PROJECT_DIR=${shellEscape(options.remoteProjectDir)}`,
+      `SURFACE_REMEMBERED_AUTH_PATH=${shellEscape(options.statePath)}`,
       `SURFACE_REMEMBER_ACCOUNT=${shellEscape(accountName)}`,
       `SURFACE_AUTH_CHECK_INTERVAL_SECONDS=${shellEscape(String(options.authCheckIntervalSeconds))}`,
       `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH node -e ${shellEscape(script)}`,
@@ -263,26 +211,21 @@ process.stdout.write(JSON.stringify({
   );
 
   const parsed = JSON.parse(extractJsonEnvelope(result.stdout)) as {
-    env_path: string;
+    state_path: string;
     accounts: string[];
     auth_check_interval_seconds: number;
   };
   return {
     ...parsed,
-    secret_storage: "Remote Surface auth storage; the remote project .env stores account/check settings only.",
+    secret_storage: "Remote Surface auth storage; remembered auth state stores account/check settings only.",
     check_command: `ssh ${shellEscape(remoteHost)} ${shellEscape(
-      `cd ${shellEscape(options.remoteProjectDir)} && surface auth check --remembered-only --due-only`,
+      `SURFACE_CACHE_DIR=${shellEscape(options.stateRoot)} surface auth check --remembered-only --due-only`,
     )}`,
-    reauth_command: `surface auth login ${shellEscape(accountName)} --remote-host ${shellEscape(remoteHost)} --remember-me --remote-project-dir ${shellEscape(options.remoteProjectDir)}`,
+    reauth_command: `surface auth login ${shellEscape(accountName)} --remote-host ${shellEscape(remoteHost)} --remember-me`,
   };
 }
 
-async function preflightRemoteRememberMe(
-  remoteHost: string,
-  accountName: string,
-  options: { remoteProjectDir: string },
-): Promise<void> {
-  await assertRemoteProjectDirectory(remoteHost, options.remoteProjectDir);
+async function preflightRemoteRememberMe(remoteHost: string, accountName: string): Promise<void> {
   await runRemoteShell(
     remoteHost,
     [
@@ -497,21 +440,14 @@ async function remoteFileExists(remoteHost: string, filePath: string): Promise<b
 }
 
 async function resolveRemoteSurfaceRoot(remoteHost: string): Promise<string> {
-  const defaultRoot = "~/.surface-cli";
-  const command = "if [ -f ~/.surface-cli/config.toml ]; then cat ~/.surface-cli/config.toml; fi";
-  const result = await runRemoteShell(remoteHost, command);
-  if (!result.stdout.trim()) {
-    return defaultRoot;
+  const payload = await runRemoteSurfaceJson<RemoteCacheStatsEnvelope>(remoteHost, ["cache", "stats"]);
+  if (!payload.cache_root || typeof payload.cache_root !== "string") {
+    throw new SurfaceError(
+      "invalid_configuration",
+      `Remote surface cache stats on '${remoteHost}' did not return cache_root.`,
+    );
   }
-
-  try {
-    const parsed = parseToml(result.stdout) as { cache_dir?: unknown };
-    return typeof parsed.cache_dir === "string" && parsed.cache_dir.trim().length > 0
-      ? parsed.cache_dir.trim()
-      : defaultRoot;
-  } catch {
-    return defaultRoot;
-  }
+  return payload.cache_root;
 }
 
 async function ensureRemoteDirectory(remoteHost: string, directory: string): Promise<void> {
@@ -792,7 +728,7 @@ export async function runRemoteAuthLogin(
   context: RuntimeContext,
   accountName: string,
   remoteHost: string,
-  options: { rememberMe?: boolean; remoteProjectDir?: string } = {},
+  options: { rememberMe?: boolean } = {},
 ): Promise<RemoteAuthLoginEnvelope> {
   const remoteAccount = await resolveRemoteAccount(remoteHost, accountName);
   const remoteStatus = await resolveRemoteAuthStatus(remoteHost, accountName, {
@@ -800,9 +736,12 @@ export async function runRemoteAuthLogin(
     bestEffort: true,
   });
   await promptForRemoteReplacement(remoteHost, remoteAccount, remoteStatus);
-  const remoteProjectDir = options.remoteProjectDir ?? process.cwd();
+  const remoteSurfaceRoot = options.rememberMe ? await resolveRemoteSurfaceRoot(remoteHost) : null;
+  const remoteRememberedAuthPath = remoteSurfaceRoot
+    ? joinRemotePath(remoteSurfaceRoot, "remembered-auth.json")
+    : null;
   if (options.rememberMe) {
-    await preflightRemoteRememberMe(remoteHost, accountName, { remoteProjectDir });
+    await preflightRemoteRememberMe(remoteHost, accountName);
   }
 
   let envelope: RemoteAuthLoginEnvelope;
@@ -820,7 +759,8 @@ export async function runRemoteAuthLogin(
 
   if (options.rememberMe) {
     envelope.remembered_auth = await rememberRemoteAuthAccount(remoteHost, accountName, {
-      remoteProjectDir,
+      stateRoot: remoteSurfaceRoot ?? "~/.surface-cli",
+      statePath: remoteRememberedAuthPath ?? "~/.surface-cli/remembered-auth.json",
       authCheckIntervalSeconds: context.config.authCheckIntervalSeconds,
     });
   }

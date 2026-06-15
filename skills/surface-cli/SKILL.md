@@ -86,16 +86,17 @@ surface auth login gmx \
 ```
 
 Use `surface auth login <account> --remember-me` when local automation should keep checking that
-account for stale auth. This records remembered-auth account names and check cadence in the project
-`.env`; raw provider tokens, Outlook profile cookies, and IMAP passwords remain in Surface auth
-storage. Surface only auto-loads remembered-auth metadata and `SURFACE_CACHE_DIR` from project
-`.env`; write-safety and summarizer settings still come from the process environment or
-`config.toml`. Use `surface auth check --remembered-only --due-only` from scheduled or watcher
-workflows.
+account for stale auth. This records remembered-auth account names and check cadence in
+`remembered-auth.json` under the Surface state root; local login also updates the project `.env`
+marker for compatibility. Raw provider tokens, Outlook profile cookies, and IMAP passwords remain
+in Surface auth storage. Surface only auto-loads compatibility remembered-auth metadata and
+`SURFACE_CACHE_DIR` from project `.env`; write-safety and summarizer settings still come from the
+process environment or `config.toml`. Use `surface auth check --remembered-only --due-only` from
+scheduled or watcher workflows.
 
 For remote auth, use `surface auth login <account> --remote-host <host> --remember-me` so the
-remembered-auth marker is written on the remote host after auth succeeds. Add
-`--remote-project-dir <path>` only when the remote checkout path differs from the local cwd.
+remembered-auth marker is written to the remote Surface state root after auth succeeds. No remote
+project directory is required.
 
 For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
 provider web settings before logging in. Generic IMAP login does not need a

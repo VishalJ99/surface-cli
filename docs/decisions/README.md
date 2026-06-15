@@ -65,3 +65,4 @@ Use zero-padded sequential numbers:
 - `0041-direct-send-supports-local-attachments.md`
 - `0042-imap-auth-uses-provider-presets.md`
 - `0043-remembered-auth-uses-project-dotenv.md`
+- `0044-remembered-auth-uses-surface-state.md`
