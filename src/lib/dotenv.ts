@@ -133,13 +133,23 @@ export function parseRememberedAuthAccounts(value: string | undefined): string[]
     try {
       const parsed = JSON.parse(trimmedValue) as unknown;
       if (Array.isArray(parsed)) {
+        if (!parsed.every((entry) => typeof entry === "string")) {
+          throw new Error("array entries must be strings");
+        }
         return dedupeRememberedAuthAccounts(
-          parsed.filter((entry): entry is string => typeof entry === "string"),
+          parsed,
         );
       }
-    } catch {
-      return [];
+    } catch (error) {
+      throw new SurfaceError(
+        "invalid_configuration",
+        `SURFACE_REMEMBERED_AUTH_ACCOUNTS must be a JSON array of account names: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
+    throw new SurfaceError(
+      "invalid_configuration",
+      "SURFACE_REMEMBERED_AUTH_ACCOUNTS must be a JSON array of account names.",
+    );
   }
 
   return dedupeRememberedAuthAccounts(value.split(","));

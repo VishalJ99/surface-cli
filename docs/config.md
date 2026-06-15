@@ -119,6 +119,7 @@ Remembered auth runtime requirements:
   JSON array of account names used by `surface auth check --remembered-only`.
   Legacy comma-separated values are accepted for compatibility, but `--remember-me` writes JSON so
   account names containing spaces or commas round-trip correctly.
+  Malformed JSON array values fail closed with `invalid_configuration`.
 - `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
   Check cadence used when `surface auth check` is called without `--interval`.
 - The project `.env` file is ignored by git and may contain local-only settings. It should not be

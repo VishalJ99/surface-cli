@@ -107,6 +107,21 @@ test("parseRememberedAuthAccounts accepts JSON arrays and legacy comma lists", (
   assert.deepEqual(parseRememberedAuthAccounts("personal,uni,personal"), ["personal", "uni"]);
 });
 
+test("parseRememberedAuthAccounts fails closed for malformed JSON arrays", () => {
+  assert.throws(
+    () => parseRememberedAuthAccounts("[\"personal\""),
+    (error) => error instanceof SurfaceError
+      && error.code === "invalid_configuration"
+      && /SURFACE_REMEMBERED_AUTH_ACCOUNTS/.test(error.message),
+  );
+  assert.throws(
+    () => parseRememberedAuthAccounts("[\"personal\",1]"),
+    (error) => error instanceof SurfaceError
+      && error.code === "invalid_configuration"
+      && /array entries must be strings/.test(error.message),
+  );
+});
+
 test("rememberAuthAccountInProjectEnv merges remembered accounts", () => {
   const dir = mkdtempSync(join(tmpdir(), "surface-remember-"));
   const path = join(dir, ".env");
