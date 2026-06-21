@@ -363,10 +363,36 @@ Example session start result:
 ### Cache
 
 - `surface cache stats`
-- `surface cache prune`
+- `surface cache prune [--dry-run] [--max-age-seconds <seconds>]`
 - `surface cache clear --account <account>`
 - `surface cache clear --message <message_ref>`
 - `surface cache clear --all`
+
+`surface cache prune` removes only disposable Surface-owned temp artifacts. In v1 this means stale
+Outlook headless browser profile clones named `surface-outlook-*` directly under the OS temp root.
+It must not delete auth data, downloaded attachments, SQLite state, or persistent Outlook profiles
+under `auth/<account_id>/profile`. When `dry_run` is true, `removed` and `removed_bytes` describe
+what would be removed without deleting anything.
+
+Example dry-run output:
+
+```json
+{
+  "schema_version": "1",
+  "command": "cache-prune",
+  "status": "ok",
+  "cache_root": "/Users/alice/.surface-cli",
+  "outlook_temp_profiles": {
+    "scanned": 2,
+    "removed": 1,
+    "skipped_active": 0,
+    "skipped_young": 1,
+    "skipped_error": 0,
+    "removed_bytes": 870000000,
+    "dry_run": true
+  }
+}
+```
 
 ## Naming Decisions
 

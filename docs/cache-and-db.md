@@ -112,13 +112,20 @@ Use the directories this way:
 Expected command model:
 
 - `surface cache stats`
-- `surface cache prune`
+- `surface cache prune [--dry-run] [--max-age-seconds <seconds>]`
 - `surface cache clear --account <account>`
 - `surface cache clear --message <message_ref>`
 - `surface cache clear --all`
 
 Auth data should not be deleted by cache commands.
 Downloaded attachments should also not be deleted by cache commands unless explicitly documented later.
+
+`surface cache prune` may remove only Surface-owned disposable temp artifacts that are outside the
+persistent state root. In v1, that means stale Outlook headless browser clones named
+`surface-outlook-*` directly under the OS temp root. These clones are copied working profiles, not
+the persistent Outlook auth profile under `auth/<account_id>/profile`. The default prune age is six
+hours, and prune skips profiles that are young, marked with a live owner PID, or referenced by active
+browser process arguments.
 
 ## Open Questions
 

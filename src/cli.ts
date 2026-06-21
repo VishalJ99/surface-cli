@@ -35,6 +35,10 @@ import {
 import { nowIsoUtc } from "./lib/time.js";
 import { syncUnreadState } from "./lib/unread-state.js";
 import { resolveProviderAdapter } from "./providers/index.js";
+import {
+  DEFAULT_OUTLOOK_TEMP_PROFILE_MAX_AGE_SECONDS,
+  pruneOutlookTempProfiles,
+} from "./providers/outlook/temp-profiles.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
 import {
   DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
@@ -86,6 +90,17 @@ function positiveInt(value: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) {
     throw new SurfaceError("invalid_argument", "Expected a safe positive integer.");
+  }
+  return parsed;
+}
+
+function nonNegativeInt(value: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(value)) {
+    throw new SurfaceError("invalid_argument", "Expected a non-negative integer.");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new SurfaceError("invalid_argument", "Expected a safe non-negative integer.");
   }
   return parsed;
 }
@@ -1280,16 +1295,30 @@ cacheCommand.command("stats").action(async (_options, command: Command) => {
   });
 });
 
-cacheCommand.command("prune").action(async (_options, command: Command) => {
-  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
-    writeJson({
-      schema_version: "1",
-      command: "cache-prune",
-      status: "noop",
-      cache_root: context.paths.cacheDir,
+cacheCommand
+  .command("prune")
+  .option("--dry-run", "Report stale Outlook temp profiles without deleting them", false)
+  .option(
+    "--max-age-seconds <seconds>",
+    "Only prune Outlook temp profiles at least this old",
+    nonNegativeInt,
+    DEFAULT_OUTLOOK_TEMP_PROFILE_MAX_AGE_SECONDS,
+  )
+  .action(async (options: { dryRun: boolean; maxAgeSeconds: number }, command: Command) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+      const outlookTempProfiles = pruneOutlookTempProfiles({
+        dryRun: options.dryRun,
+        maxAgeSeconds: options.maxAgeSeconds,
+      });
+      writeJson({
+        schema_version: "1",
+        command: "cache-prune",
+        status: outlookTempProfiles.skipped_error > 0 ? "partial" : "ok",
+        cache_root: context.paths.rootDir,
+        outlook_temp_profiles: outlookTempProfiles,
+      });
     });
   });
-});
 
 cacheCommand
   .command("clear")
