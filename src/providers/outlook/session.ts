@@ -1,12 +1,14 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
 import { chromium, errors, type BrowserContext, type Page } from "playwright-core";
 
 import type { AuthStatus } from "../types.js";
+import {
+  createOutlookTempProfileClone,
+  pruneOutlookTempProfiles,
+} from "./temp-profiles.js";
 
 const DEFAULT_OUTLOOK_URL = "https://outlook.office.com/mail/";
 
@@ -52,8 +54,12 @@ export async function launchOutlookSession(
   let cleanup: (() => void) | undefined;
 
   if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
-    effectiveProfileDir = join(tmpdir(), `surface-outlook-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    cpSync(profileDir, effectiveProfileDir, { recursive: true });
+    try {
+      pruneOutlookTempProfiles();
+    } catch {
+      // Stale temp cleanup is opportunistic and must not block Outlook account use.
+    }
+    effectiveProfileDir = createOutlookTempProfileClone(profileDir);
     cleanup = () => rmSync(effectiveProfileDir, { recursive: true, force: true });
   }
 

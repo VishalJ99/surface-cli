@@ -6,10 +6,26 @@ import { join } from "node:path";
 
 import { accountIdentityInputSchema, accountInputSchema, providerSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
+import {
+  authStatusNeedsLogin,
+  buildAuthCheckRecord,
+  isAuthCheckDue,
+  readAuthCheckState,
+  writeAuthCheckState,
+} from "./lib/auth-check.js";
 import { resolveLocalComposeAttachments } from "./lib/compose-attachments.js";
+import {
+  loadProjectDotenv,
+  parseRememberedAuthAccounts,
+  rememberAuthAccountInProjectEnv,
+} from "./lib/dotenv.js";
 import { writeJson } from "./lib/json.js";
 import { toPublicThread } from "./lib/public-mail.js";
 import { runRemoteAuthLogin } from "./lib/remote-auth.js";
+import {
+  readRememberedAuthState,
+  rememberAuthAccountInState,
+} from "./lib/remembered-auth.js";
 import { loadStoredThread, threadHasReadableCache } from "./lib/stored-mail.js";
 import {
   expandSkillInstallTargets,
@@ -19,6 +35,10 @@ import {
 import { nowIsoUtc } from "./lib/time.js";
 import { syncUnreadState } from "./lib/unread-state.js";
 import { resolveProviderAdapter } from "./providers/index.js";
+import {
+  DEFAULT_OUTLOOK_TEMP_PROFILE_MAX_AGE_SECONDS,
+  pruneOutlookTempProfiles,
+} from "./providers/outlook/temp-profiles.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
 import {
   DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
@@ -34,9 +54,31 @@ import {
   stopWarmSession,
 } from "./session.js";
 import type { ImapSmtpSecurityMode } from "./providers/types.js";
+import type { MailAccount } from "./contracts/account.js";
+import type { AuthStatus } from "./providers/types.js";
 
 interface GlobalOptions {
   config?: string;
+}
+
+interface PublicAuthCheckResult {
+  account: string;
+  provider: MailAccount["provider"];
+  transport: string;
+  remembered: boolean;
+  checked: boolean;
+  due: boolean;
+  stale: boolean | null;
+  reauth_required: boolean | null;
+  status: AuthStatus;
+  login_command: string;
+  checked_at: string | null;
+  last_checked_at: string | null;
+  next_check_at: string | null;
+  login_attempted?: boolean;
+  login_result?: AuthStatus;
+  login_error?: ReturnType<typeof errorToEnvelope>["error"];
+  check_error?: ReturnType<typeof errorToEnvelope>["error"];
 }
 
 const DEFAULT_SENT_LIMIT = 10;
@@ -48,6 +90,17 @@ function positiveInt(value: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) {
     throw new SurfaceError("invalid_argument", "Expected a safe positive integer.");
+  }
+  return parsed;
+}
+
+function nonNegativeInt(value: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(value)) {
+    throw new SurfaceError("invalid_argument", "Expected a non-negative integer.");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new SurfaceError("invalid_argument", "Expected a safe non-negative integer.");
   }
   return parsed;
 }
@@ -237,6 +290,116 @@ async function runThreadAction(
   });
 }
 
+function authLoginCommand(accountName: string): string {
+  return `surface auth login ${shellQuote(accountName)}`;
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function publicStatusFromRecord(record: ReturnType<typeof readAuthCheckState>["accounts"][string] | undefined): AuthStatus {
+  if (!record) {
+    return {
+      status: "unknown",
+      detail: "No previous auth check has been recorded for this account.",
+    };
+  }
+  return record.detail === null
+    ? { status: record.status }
+    : { status: record.status, detail: record.detail };
+}
+
+async function runProviderAuthCheck(
+  account: MailAccount,
+  context: ReturnType<typeof createRuntimeContext>,
+  rememberedAccounts: Set<string>,
+  intervalSeconds: number,
+  options: { dueOnly: boolean; loginIfStale: boolean },
+): Promise<PublicAuthCheckResult> {
+  const checkedAt = nowIsoUtc();
+  const state = readAuthCheckState(context.paths.rootDir);
+  const previousRecord = state.accounts[account.account_id];
+  const due = isAuthCheckDue(previousRecord, checkedAt);
+  const remembered = rememberedAccounts.has(account.name);
+
+  if (options.dueOnly && !due) {
+    return {
+      account: account.name,
+      provider: account.provider,
+      transport: account.transport,
+      remembered,
+      checked: false,
+      due: false,
+      stale: previousRecord?.stale ?? null,
+      reauth_required: previousRecord?.reauth_required ?? null,
+      status: publicStatusFromRecord(previousRecord),
+      login_command: authLoginCommand(account.name),
+      checked_at: null,
+      last_checked_at: previousRecord?.checked_at ?? null,
+      next_check_at: previousRecord?.next_check_at ?? null,
+    };
+  }
+
+  const adapter = resolveProviderAdapter(account);
+  const accountContext = createAccountRuntimeContext(context, account);
+  let status: AuthStatus;
+  let checkError: ReturnType<typeof errorToEnvelope>["error"] | undefined;
+
+  try {
+    status = await adapter.authStatus(account, accountContext);
+  } catch (error) {
+    const envelope = errorToEnvelope(error);
+    checkError = envelope.error;
+    status = {
+      status: "unknown",
+      detail: envelope.error.message,
+    };
+  }
+
+  let stale = authStatusNeedsLogin(status);
+  const result: PublicAuthCheckResult = {
+    account: account.name,
+    provider: account.provider,
+    transport: account.transport,
+    remembered,
+    checked: true,
+    due,
+    stale,
+    reauth_required: stale,
+    status,
+    login_command: authLoginCommand(account.name),
+    checked_at: checkedAt,
+    last_checked_at: previousRecord?.checked_at ?? null,
+    next_check_at: null,
+    ...(checkError ? { check_error: checkError } : {}),
+  };
+
+  if (stale && options.loginIfStale) {
+    result.login_attempted = true;
+    try {
+      const loginResult = await adapter.login(account, accountContext);
+      result.login_result = loginResult;
+      status = loginResult;
+      stale = authStatusNeedsLogin(loginResult);
+      result.status = loginResult;
+      result.stale = stale;
+      result.reauth_required = stale;
+    } catch (error) {
+      result.login_error = errorToEnvelope(error).error;
+    }
+  }
+
+  const updatedRecord = buildAuthCheckRecord(account, status, checkedAt, intervalSeconds);
+  state.accounts[account.account_id] = updatedRecord;
+  writeAuthCheckState(context.paths.rootDir, state);
+  result.next_check_at = updatedRecord.next_check_at;
+  return result;
+}
+
 const program = new Command();
 program
   .name("surface")
@@ -383,6 +546,7 @@ const authCommand = program.command("auth").description("Manage provider authent
 authCommand
   .command("login")
   .argument("<account>", "Logical account name")
+  .option("--remember-me", "Record this account for remembered auth checks")
   .option("--remote-host <host>", "Run auth login against an existing Surface account on a remote host")
   .option("--imap-host <host>", "IMAP server hostname for imap-smtp accounts")
   .addOption(new Option("--imap-port <port>", "IMAP server port for imap-smtp accounts").argParser(positiveInt))
@@ -398,7 +562,9 @@ authCommand
   .action(async (accountName: string, options, command: Command) => {
     if (options.remoteHost) {
       await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
-        writeJson(await runRemoteAuthLogin(context, accountName, options.remoteHost));
+        writeJson(await runRemoteAuthLogin(context, accountName, options.remoteHost, {
+          rememberMe: Boolean(options.rememberMe),
+        }));
       });
       return;
     }
@@ -421,6 +587,16 @@ authCommand
           passwordCommand: normalizeOptionalString(options.passwordCommand),
         },
       });
+      const rememberedState = options.rememberMe
+        ? rememberAuthAccountInState(context.paths.rootDir, context.account.name, {
+          authCheckIntervalSeconds: context.config.authCheckIntervalSeconds,
+        })
+        : null;
+      const rememberedProjectEnv = options.rememberMe
+        ? rememberAuthAccountInProjectEnv(context.account.name, {
+          authCheckIntervalSeconds: rememberedState?.authCheckIntervalSeconds ?? context.config.authCheckIntervalSeconds,
+        })
+        : null;
       writeJson({
         schema_version: "1",
         command: "auth-login",
@@ -428,6 +604,17 @@ authCommand
         provider: context.account.provider,
         transport: context.account.transport,
         status,
+        ...(rememberedState
+          ? {
+            remembered_auth: {
+              state_path: rememberedState.statePath,
+              env_path: rememberedProjectEnv?.envPath,
+              accounts: rememberedState.rememberedAccounts,
+              auth_check_interval_seconds: rememberedState.authCheckIntervalSeconds,
+              secret_storage: "Surface auth storage; remembered auth state stores account/check settings only.",
+            },
+          }
+          : {}),
       });
     });
   });
@@ -471,6 +658,62 @@ authCommand
         schema_version: "1",
         command: "auth-status",
         accounts: statuses,
+      });
+    });
+  });
+
+authCommand
+  .command("check")
+  .argument("[account]", "Logical account name")
+  .description("Probe auth freshness and report whether login is required")
+  .addOption(new Option("--interval <seconds>", "Seconds before the next check is due").argParser(positiveInt))
+  .option("--due-only", "Skip provider probes when the stored next-check time has not arrived", false)
+  .option("--remembered-only", "Only check accounts recorded by auth login --remember-me", false)
+  .option("--login-if-stale", "Run auth login for stale accounts after the probe", false)
+  .action(async (accountName: string | undefined, options, command: Command) => {
+    const globalOptions = command.optsWithGlobals<GlobalOptions>();
+    await runAction(globalOptions, async (context) => {
+      if (accountName && options.rememberedOnly) {
+        throw new SurfaceError(
+          "invalid_argument",
+          "Pass either an account or --remembered-only, not both.",
+          { account: accountName },
+        );
+      }
+
+      const rememberedState = readRememberedAuthState(context.paths.rootDir, context.config.authCheckIntervalSeconds);
+      const rememberedAccounts = new Set([
+        ...rememberedState.accounts,
+        ...parseRememberedAuthAccounts(process.env.SURFACE_REMEMBERED_AUTH_ACCOUNTS),
+      ]);
+      const intervalSeconds = options.interval
+        ?? (options.rememberedOnly ? rememberedState.auth_check_interval_seconds : context.config.authCheckIntervalSeconds);
+      const accounts = accountName
+        ? [context.db.findAccountByName(accountName)].filter((account): account is MailAccount => Boolean(account))
+        : context.db.listAccounts().filter((account) => !options.rememberedOnly || rememberedAccounts.has(account.name));
+
+      if (accountName && accounts.length === 0) {
+        throw new SurfaceError("not_found", `Account '${accountName}' was not found.`, {
+          account: accountName,
+        });
+      }
+
+      const results: PublicAuthCheckResult[] = [];
+      for (const account of accounts) {
+        results.push(await runProviderAuthCheck(account, context, rememberedAccounts, intervalSeconds, {
+          dueOnly: Boolean(options.dueOnly),
+          loginIfStale: Boolean(options.loginIfStale),
+        }));
+      }
+
+      writeJson({
+        schema_version: "1",
+        command: "auth-check",
+        interval_seconds: intervalSeconds,
+        due_only: Boolean(options.dueOnly),
+        remembered_only: Boolean(options.rememberedOnly),
+        login_if_stale: Boolean(options.loginIfStale),
+        accounts: results,
       });
     });
   });
@@ -1052,16 +1295,30 @@ cacheCommand.command("stats").action(async (_options, command: Command) => {
   });
 });
 
-cacheCommand.command("prune").action(async (_options, command: Command) => {
-  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
-    writeJson({
-      schema_version: "1",
-      command: "cache-prune",
-      status: "noop",
-      cache_root: context.paths.cacheDir,
+cacheCommand
+  .command("prune")
+  .option("--dry-run", "Report stale Outlook temp profiles without deleting them", false)
+  .option(
+    "--max-age-seconds <seconds>",
+    "Only prune Outlook temp profiles at least this old",
+    nonNegativeInt,
+    DEFAULT_OUTLOOK_TEMP_PROFILE_MAX_AGE_SECONDS,
+  )
+  .action(async (options: { dryRun: boolean; maxAgeSeconds: number }, command: Command) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+      const outlookTempProfiles = pruneOutlookTempProfiles({
+        dryRun: options.dryRun,
+        maxAgeSeconds: options.maxAgeSeconds,
+      });
+      writeJson({
+        schema_version: "1",
+        command: "cache-prune",
+        status: outlookTempProfiles.skipped_error > 0 ? "partial" : "ok",
+        cache_root: context.paths.rootDir,
+        outlook_temp_profiles: outlookTempProfiles,
+      });
     });
   });
-});
 
 cacheCommand
   .command("clear")
@@ -1119,7 +1376,12 @@ cacheCommand
     });
   });
 
-program.parseAsync(process.argv).catch((error: unknown) => {
+async function main(): Promise<void> {
+  loadProjectDotenv();
+  await program.parseAsync(process.argv);
+}
+
+main().catch((error: unknown) => {
   writeJson(errorToEnvelope(error));
   process.exitCode = 1;
 });

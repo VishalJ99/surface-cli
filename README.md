@@ -86,6 +86,18 @@ npm install -g surface-cli
 surface skill install all
 ```
 
+### ChatGPT and ChatGPT Work
+
+The package also includes a typed `surface-mcp` stdio server. OpenAI Secure MCP Tunnel can connect
+that local process to an unpublished, creator-only custom plugin while Surface credentials and state
+stay on the Surface host. It exposes the established mail, draft/send, session, attachment,
+read-state, archive, and RSVP capabilities as focused tools, including standard MCP resource
+delivery for bounded attachment downloads; interactive login and local
+administration remain CLI-only. Do not share this local app with other workspace members: shared use
+requires per-user authorization and isolated mailbox state.
+
+See [`docs/mcp.md`](docs/mcp.md) for the full tool inventory, safety boundaries, and tunnel setup.
+
 ## Setup
 
 Add the accounts you want Surface to manage:
@@ -112,6 +124,7 @@ Log in:
 ```bash
 surface auth login uni
 surface auth status uni
+surface auth check uni
 ```
 
 Outlook auth opens Chrome and stores a dedicated browser profile under
@@ -122,6 +135,37 @@ complete your normal Microsoft sign-in flow.
 For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
 stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
 client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.
+
+Use `surface auth login <account> --remember-me` when automation should remember that an account
+needs stale-auth checks. This writes local metadata such as the account list and check cadence to
+`remembered-auth.json` under the Surface state root. Local logins also keep the project `.env`
+marker updated for existing repo-local automation. Raw provider tokens, browser cookies, and mailbox
+passwords stay in Surface auth storage.
+Surface only auto-loads remembered-auth compatibility metadata and `SURFACE_CACHE_DIR` from the
+project `.env`; write-safety and summarizer settings still come from the process environment or
+`config.toml`.
+For remote auth, combine the flags:
+
+```bash
+surface auth login <account> --remote-host <host> --remember-me
+```
+
+That completes auth on the remote host and writes the remembered-auth marker to the remote host's
+Surface state root too. No remote project directory is required.
+
+For scheduled checks, run:
+
+```bash
+surface auth check --remembered-only --due-only
+```
+
+If a check reports `reauth_required = true`, run the returned `login_command` or explicitly use
+`surface auth check <account> --login-if-stale` when you want Surface to start the normal provider
+login flow. OAuth consent, Microsoft sign-in/2FA, and missing IMAP password input still require the
+user or an approved local secret source.
+For remote accounts, use the returned `reauth_command` or rerun
+`surface auth login <account> --remote-host <host> --remember-me`; remote scheduler checks should
+stay probe-only.
 
 For generic IMAP/SMTP, `provider=imap` uses the provider's mail server settings
 directly. It does not need a Google Cloud project, OAuth client JSON, Microsoft
@@ -198,7 +242,7 @@ Outlook remote setup:
 ssh macmini 'surface account add uni --provider outlook --email you@school.edu'
 ssh macmini 'surface account identity set uni --email you@school.edu --name "Your Name"'
 
-surface auth login uni --remote-host macmini
+surface auth login uni --remote-host macmini --remember-me
 ssh macmini 'surface auth status uni'
 ```
 
@@ -209,7 +253,7 @@ host, then validates it there.
 Gmail uses the same public remote command:
 
 ```bash
-surface auth login personal --remote-host macmini
+surface auth login personal --remote-host macmini --remember-me
 ```
 
 For Gmail, Surface starts SSH port forwarding so the OAuth callback lands on the
@@ -295,6 +339,7 @@ surface account list
 surface account identity show uni
 
 surface auth status
+surface auth check --remembered-only --due-only
 surface auth logout uni
 
 surface mail fetch-unread --account uni --limit 25
@@ -314,6 +359,7 @@ surface mail mark-unread msg_01...
 surface mail rsvp msg_01... --response tentative # Gmail/Outlook calendar invites only
 
 surface cache stats
+surface cache prune --dry-run
 surface cache prune
 ```
 
@@ -340,6 +386,7 @@ Surface v1 supports:
 - RSVP for Gmail/Outlook calendar invites
 - Outlook warm sessions for repeated read-path commands
 - optional summaries through OpenRouter or OpenClaw
+- a private typed MCP server for ChatGPT, ChatGPT Work, Codex, and other MCP clients
 
 Intentionally incomplete:
 
@@ -372,6 +419,13 @@ Surface stores local state under `~/.surface-cli`:
 material, cache metadata, and account-owner identity live in SQLite and auth
 storage, not in `config.toml`.
 
+When project-local automation is enabled, Surface also reads a local `.env` in
+the current working directory for compatibility remembered-auth account names,
+check cadence, and `SURFACE_CACHE_DIR`, but not raw provider secrets. The `.env`
+file and optional project-local `.surface-cli/` state directory are ignored by
+git. Surface intentionally does not load write-safety or summarizer keys from
+project `.env`.
+
 ## Contract Docs
 
 These are the source-of-truth docs for behavior changes:
@@ -380,6 +434,7 @@ These are the source-of-truth docs for behavior changes:
 - `docs/provider-contract.md`
 - `docs/cache-and-db.md`
 - `docs/config.md`
+- `docs/mcp.md`
 - `docs/decisions/`
 
 External skill docs:
