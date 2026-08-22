@@ -86,6 +86,18 @@ npm install -g surface-cli
 surface skill install all
 ```
 
+### ChatGPT and ChatGPT Work
+
+The package also includes a typed `surface-mcp` stdio server. OpenAI Secure MCP Tunnel can connect
+that local process to an unpublished, creator-only custom plugin while Surface credentials and state
+stay on the Surface host. It exposes the established mail, draft/send, session, attachment,
+read-state, archive, and RSVP capabilities as focused tools, including standard MCP resource
+delivery for bounded attachment downloads; interactive login and local
+administration remain CLI-only. Do not share this local app with other workspace members: shared use
+requires per-user authorization and isolated mailbox state.
+
+See [`docs/mcp.md`](docs/mcp.md) for the full tool inventory, safety boundaries, and tunnel setup.
+
 ## Setup
 
 Add the accounts you want Surface to manage:
@@ -374,6 +386,7 @@ Surface v1 supports:
 - RSVP for Gmail/Outlook calendar invites
 - Outlook warm sessions for repeated read-path commands
 - optional summaries through OpenRouter or OpenClaw
+- a private typed MCP server for ChatGPT, ChatGPT Work, Codex, and other MCP clients
 
 Intentionally incomplete:
 
@@ -421,6 +434,7 @@ These are the source-of-truth docs for behavior changes:
 - `docs/provider-contract.md`
 - `docs/cache-and-db.md`
 - `docs/config.md`
+- `docs/mcp.md`
 - `docs/decisions/`
 
 External skill docs:
