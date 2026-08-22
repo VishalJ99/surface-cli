@@ -28,6 +28,7 @@ import type {
   SentQuery,
   ThreadParticipant,
 } from "../../contracts/mail.js";
+import { sanitizeDownloadedAttachmentFilename } from "../../lib/attachment-filename.js";
 import {
   buildRawMimeMessage,
   composeAttachmentMetas,
@@ -1603,7 +1604,10 @@ export class GmailApiAdapter implements MailProviderAdapter {
 
     const targetDir = join(context.accountPaths.downloadsDir, messageRef);
     mkdirSync(targetDir, { recursive: true });
-    const targetPath = join(targetDir, `${attachmentId}__${attachment.filename}`);
+    const targetPath = join(
+      targetDir,
+      `${attachmentId}__${sanitizeDownloadedAttachmentFilename(attachment.filename)}`,
+    );
     writeFileSync(targetPath, bytes);
     context.db.updateAttachmentSavedTo(attachmentId, targetPath);
 

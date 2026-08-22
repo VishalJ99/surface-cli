@@ -236,6 +236,10 @@ At minimum:
 - any transport-specific locator required for subsequent read/download/action calls
 - any transport-specific locator required for subsequent thread refresh calls
 
+Provider-controlled attachment filenames must be sanitized before constructing a local download
+path. Path separators, traversal components, control characters, and platform-reserved filename
+characters must not let a download escape its Surface-owned message directory.
+
 These locators are internal storage concerns and should not be exposed in the public stdout JSON contract.
 
 ## Still Deferred
