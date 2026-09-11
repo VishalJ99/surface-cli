@@ -8,3 +8,4 @@
 - `src/lib/browser-capacity.test.ts` — Lease contention, stale-owner, descendant-preservation, and configuration tests.
 - `src/providers/outlook/browser-lifecycle.test.ts` — Local no-mail Chromium lifecycle and failed-launch cleanup tests.
 - `docs/decisions/0047-bounded-shared-browser-automation-capacity.md` — PER-510 browser-capacity, deadline, and stale-process decision.
+- `src/providers/outlook/adapter.compose.test.ts` — Self-contained local Playwright fixture for Outlook recipient-picker and compose-field behavior; uses synthetic addresses and no mailbox state.
