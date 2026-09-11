@@ -1060,7 +1060,7 @@ async function openConversationForAction(
 }
 
 async function ensureRecipientField(page: Page, label: "To" | "Cc" | "Bcc") {
-  let field = page.locator(`[aria-label="${label}"][contenteditable="true"]`).first();
+  let field = page.locator(`[aria-label="${label}"][contenteditable="true"]:visible`).first();
   if ((await field.count()) > 0) {
     return field;
   }
@@ -1068,9 +1068,73 @@ async function ensureRecipientField(page: Page, label: "To" | "Cc" | "Bcc") {
   const toggle = page.getByText(label, { exact: true }).last();
   await toggle.click();
   await page.waitForTimeout(400);
-  field = page.locator(`[aria-label="${label}"][contenteditable="true"]`).first();
+  field = page.locator(`[aria-label="${label}"][contenteditable="true"]:visible`).first();
   await field.waitFor({ timeout: 10_000 });
   return field;
+}
+
+const OUTLOOK_RECIPIENT_TOKEN_SELECTOR =
+  "._EType_RECIPIENT_ENTITY[contenteditable='false'][draggable='true'][aria-label]";
+
+interface RecipientTokenSnapshot {
+  id: string;
+  ariaLabel: string;
+  text: string;
+}
+
+async function recipientTokenSnapshots(field: Locator): Promise<RecipientTokenSnapshot[]> {
+  return field
+    .locator(OUTLOOK_RECIPIENT_TOKEN_SELECTOR)
+    .evaluateAll((tokens) => tokens.map((token) => {
+      const textCopy = token.cloneNode(true) as HTMLElement;
+      textCopy.querySelectorAll('[aria-hidden="true"]').forEach((element) => element.remove());
+      return {
+        id: token.id,
+        ariaLabel: token.getAttribute("aria-label") ?? "",
+        text: textCopy.textContent ?? "",
+      };
+    }));
+}
+
+function tokenValueHasExactRecipient(value: string, recipient: string): boolean {
+  const expected = normalizeComparableEmail(recipient);
+  const candidate = normalizedTokenText(value);
+  return candidate === expected || candidate.endsWith(` <${expected}>`);
+}
+
+function hasExactRecipient(tokens: RecipientTokenSnapshot[], recipient: string): boolean {
+  return tokens.some((token) =>
+    tokenValueHasExactRecipient(token.ariaLabel, recipient)
+    || tokenValueHasExactRecipient(token.text, recipient)
+  );
+}
+
+function normalizedTokenText(value: string): string {
+  return value.replaceAll("\u200b", "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function addedRecipientTokens(
+  before: RecipientTokenSnapshot[],
+  after: RecipientTokenSnapshot[],
+): RecipientTokenSnapshot[] | null {
+  const remaining = [...after];
+  for (const previous of before) {
+    const previousKey = `${normalizedTokenText(previous.ariaLabel)}\n${normalizedTokenText(previous.text)}`;
+    const index = remaining.findIndex((candidate) => previous.id
+      ? candidate.id === previous.id
+        && normalizedTokenText(candidate.text) === normalizedTokenText(previous.text)
+      : `${normalizedTokenText(candidate.ariaLabel)}\n${normalizedTokenText(candidate.text)}` === previousKey
+    );
+    if (index === -1) {
+      return null;
+    }
+    remaining.splice(index, 1);
+  }
+  return remaining;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function fillRecipientField(page: Page, label: "To" | "Cc" | "Bcc", recipients: string[]): Promise<void> {
@@ -1079,12 +1143,96 @@ async function fillRecipientField(page: Page, label: "To" | "Cc" | "Bcc", recipi
     return;
   }
 
-  const field = await ensureRecipientField(page, label);
   for (const recipient of normalizedRecipients) {
-    await field.click();
-    await field.type(recipient);
-    await field.press("Enter");
-    await page.waitForTimeout(150);
+    const field = await ensureRecipientField(page, label);
+    const beforeTokens = await recipientTokenSnapshots(field);
+    if (hasExactRecipient(beforeTokens, recipient)) {
+      continue;
+    }
+
+    let selectedRawAddress = false;
+    let selectedDirectoryName: string | null = null;
+    try {
+      await field.click();
+      await field.evaluate((editor) => {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(false);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      });
+      await field.type(recipient);
+
+      const picker = page.locator('#FloatingSuggestionsList[role="listbox"]:visible').first();
+      await picker.waitFor({ state: "visible" });
+      const escapedRecipient = escapeRegExp(recipient);
+      const rawAddressOption = picker.getByRole("button", {
+        name: new RegExp(`^Use this address: ${escapedRecipient}$`, "i"),
+      });
+      const directoryOption = picker.getByRole("option", {
+        name: new RegExp(`^.+ - ${escapedRecipient}$`, "i"),
+      });
+      await rawAddressOption.or(directoryOption).first().waitFor({ state: "visible" });
+
+      selectedRawAddress = await rawAddressOption.isVisible();
+      const exactOption = selectedRawAddress ? rawAddressOption : directoryOption.first();
+      if (!selectedRawAddress) {
+        const optionName = (await exactOption.getAttribute("aria-label")) ?? (await exactOption.innerText());
+        const match = optionName.match(new RegExp(`^(.+) - ${escapedRecipient}$`, "i"));
+        selectedDirectoryName = match?.[1]?.trim() ?? null;
+        if (!selectedDirectoryName) {
+          throw new SurfaceError(
+            "transport_error",
+            `Outlook did not expose an exact directory identity for ${label} recipient '${recipient}'.`,
+          );
+        }
+      }
+
+      await exactOption.click();
+      await picker.waitFor({ state: "hidden" });
+
+      await page.waitForFunction(
+        ({ recipientLabel, minimumCount, tokenSelector }) => {
+          const fields = [...document.querySelectorAll<HTMLElement>(
+            `[aria-label="${recipientLabel}"][contenteditable="true"]`,
+          )];
+          const visibleField = fields.find((candidate) => candidate.getClientRects().length > 0);
+          return Boolean(visibleField && visibleField.querySelectorAll(tokenSelector).length > minimumCount);
+        },
+        {
+          recipientLabel: label,
+          minimumCount: beforeTokens.length,
+          tokenSelector: OUTLOOK_RECIPIENT_TOKEN_SELECTOR,
+        },
+      );
+    } catch (error) {
+      if (error instanceof SurfaceError) {
+        throw error;
+      }
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook did not offer and commit the exact ${label} recipient '${recipient}': ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    const committedTokens = await recipientTokenSnapshots(await ensureRecipientField(page, label));
+    const addedTokens = addedRecipientTokens(beforeTokens, committedTokens);
+    const committedExactAddress = selectedRawAddress && addedTokens?.length === 1
+      && hasExactRecipient(addedTokens, recipient);
+    const committedDirectoryIdentity = selectedDirectoryName && addedTokens?.length === 1
+      && (
+        hasExactRecipient(addedTokens, recipient)
+        || normalizedTokenText(addedTokens[0]?.text ?? "") === normalizedTokenText(selectedDirectoryName)
+      );
+    if (!committedExactAddress && !committedDirectoryIdentity) {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook committed a different ${label} recipient while resolving '${recipient}'.`,
+      );
+    }
   }
 }
 
@@ -2323,3 +2471,8 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     };
   }
 }
+
+export const outlookAdapterTestHooks = {
+  fillComposeBody,
+  fillRecipientField,
+};

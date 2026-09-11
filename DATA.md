@@ -1,3 +1,4 @@
 - `.env` — Local-only dotenv file for Surface runtime overrides such as compatibility remembered-auth account names, auth-check cadence, and `SURFACE_CACHE_DIR`; ignored by git.
 - `.surface-cli/` — Optional project-local Surface state root when `SURFACE_CACHE_DIR` points inside the checkout; contains SQLite state, auth material, cache, downloads, remembered-auth state, and auth-check state; ignored by git.
 - `outputs/` — Local-only generated reports and benchmark artifacts. May contain private mailbox content; ignored by git and not suitable for repository commits.
+- `src/providers/outlook/adapter.compose.test.ts` — Self-contained local Playwright fixture for Outlook recipient-picker and compose-field behavior; uses synthetic addresses and no mailbox state.

@@ -187,6 +187,9 @@ Capabilities are account/transport-level. Message applicability should be derive
 ## Write Action Rules
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists
+- browser-backed compose transports must select a recipient suggestion that contains the exact
+  requested email address, preserve existing recipient chips, and verify that exactly one matching
+  recipient chip was committed before moving to the next field or the message body
 - direct `send` supports repeatable local file attachments through `--attach`; reply/reply-all/forward
   attachment upload remains deferred until those semantics are explicitly designed
 - `archive` is part of the supported v1 action set
