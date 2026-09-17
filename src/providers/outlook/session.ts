@@ -4,6 +4,11 @@ import { stdin, stdout } from "node:process";
 
 import { chromium, errors, type BrowserContext, type Page } from "playwright-core";
 
+import {
+  acquireSurfaceBrowserLease,
+  browserAutomationRuntimeConfig,
+} from "../../lib/browser-capacity.js";
+import { BROWSER_COMMAND_DEADLINE_REASON, SurfaceError } from "../../lib/errors.js";
 import type { AuthStatus } from "../types.js";
 import {
   createOutlookTempProfileClone,
@@ -42,40 +47,136 @@ function resolveChromeExecutablePath(): string {
 export interface OutlookSession {
   context: BrowserContext;
   page: Page;
+  // Internal process-recovery marker. It is never included in CLI or hosted-auth JSON.
+  browserMarker: string;
   cleanup?: () => void;
+  close(): Promise<void>;
+  deadlineExceeded(): boolean;
+}
+
+export type OutlookSessionPurpose = "auth" | "command" | "interactive" | "warm";
+
+export interface LaunchOutlookSessionOptions {
+  headless: boolean;
+  purpose?: OutlookSessionPurpose;
+  commandTimeoutMs?: number;
 }
 
 export async function launchOutlookSession(
   profileDir: string,
-  options: { headless: boolean },
+  options: LaunchOutlookSessionOptions,
 ): Promise<OutlookSession> {
+  const purpose = options.purpose ?? "command";
+  const lease = await acquireSurfaceBrowserLease(purpose === "auth" ? "auth" : purpose === "warm" ? "warm" : "command");
   mkdirSync(profileDir, { recursive: true });
   let effectiveProfileDir = profileDir;
   let cleanup: (() => void) | undefined;
+  let launchedContext: BrowserContext | undefined;
 
-  if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
-    try {
-      pruneOutlookTempProfiles();
-    } catch {
-      // Stale temp cleanup is opportunistic and must not block Outlook account use.
+  try {
+    if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
+      try {
+        pruneOutlookTempProfiles();
+      } catch {
+        // Stale temp cleanup is opportunistic and must not block Outlook account use.
+      }
+      effectiveProfileDir = createOutlookTempProfileClone(profileDir);
+      cleanup = () => rmSync(effectiveProfileDir, { recursive: true, force: true });
     }
-    effectiveProfileDir = createOutlookTempProfileClone(profileDir);
-    cleanup = () => rmSync(effectiveProfileDir, { recursive: true, force: true });
+
+    const context = await chromium.launchPersistentContext(effectiveProfileDir, {
+      executablePath: resolveChromeExecutablePath(),
+      headless: options.headless,
+      viewport: { width: 1440, height: 960 },
+      // This inert marker lets a later Surface process identify only its own Chromium process
+      // when recovering a lease whose parent process was forcefully terminated.
+      args: [lease.marker],
+    });
+    launchedContext = context;
+
+    const page = context.pages()[0] ?? (await context.newPage());
+    await lease.captureOwnedProcessTree();
+    const commandTimeoutMs = options.commandTimeoutMs ?? browserAutomationRuntimeConfig().commandTimeoutMs;
+    page.setDefaultTimeout(Math.min(15_000, commandTimeoutMs));
+    page.setDefaultNavigationTimeout(commandTimeoutMs);
+
+    let deadlineExceeded = false;
+    let deadlineTimer: NodeJS.Timeout | undefined;
+    let closePromise: Promise<void> | undefined;
+    let releasePromise: Promise<void> | undefined;
+    const releaseLease = (): Promise<void> => {
+      releasePromise ??= lease.release();
+      return releasePromise;
+    };
+    const clearDeadline = () => {
+      if (deadlineTimer) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = undefined;
+      }
+    };
+    const close = (): Promise<void> => {
+      closePromise ??= (async () => {
+        clearDeadline();
+        if (deadlineExceeded) {
+          await context.close({ reason: BROWSER_COMMAND_DEADLINE_REASON });
+        } else {
+          await context.close();
+        }
+        try {
+          cleanup?.();
+        } finally {
+          await releaseLease();
+        }
+      })();
+      return closePromise;
+    };
+    context.once("close", () => {
+      clearDeadline();
+      // A browser crash has already closed Chrome. Reclaim the capacity slot even when the normal
+      // caller never reaches its finally block.
+      void releaseLease().catch(() => undefined);
+    });
+    if (purpose === "command") {
+      deadlineTimer = setTimeout(() => {
+        deadlineExceeded = true;
+        void close().catch(() => undefined);
+      }, commandTimeoutMs);
+      deadlineTimer.unref();
+    }
+    return {
+      context,
+      page,
+      browserMarker: lease.marker,
+      ...(cleanup ? { cleanup } : {}),
+      close,
+      deadlineExceeded: () => deadlineExceeded,
+    };
+  } catch (error) {
+    if (launchedContext) {
+      try {
+        await launchedContext.close();
+        cleanup?.();
+        await lease.release();
+      } catch {
+        // A context that cannot close may still own Chromium/profile files. Retain the incomplete
+        // lease for fail-closed recovery rather than freeing its capacity slot.
+        throw new SurfaceError("browser_busy", "Browser launch could not be verified as stopped; retry shortly.", {
+          retryable: true,
+        });
+      }
+      throw error;
+    }
+    try {
+      // A Playwright launch can reject after Chromium has started. Verify the marker-owned tree
+      // is gone before removing its lease or candidate profile; otherwise the slot remains held
+      // and stale recovery can safely retry the owned-child reap later.
+      await lease.releaseAfterFailedLaunch();
+      cleanup?.();
+    } catch (cleanupError) {
+      throw cleanupError;
+    }
+    throw error;
   }
-
-  const context = await chromium.launchPersistentContext(effectiveProfileDir, {
-    executablePath: resolveChromeExecutablePath(),
-    headless: options.headless,
-    viewport: { width: 1440, height: 960 },
-  });
-
-  const page = context.pages()[0] ?? (await context.newPage());
-  page.setDefaultTimeout(15_000);
-  return {
-    context,
-    page,
-    ...(cleanup ? { cleanup } : {}),
-  };
 }
 
 async function bodyText(page: Page): Promise<string> {

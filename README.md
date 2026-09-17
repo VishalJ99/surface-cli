@@ -148,6 +148,21 @@ The default browser is headed. On a Linux server, provide a display such as Xvfb
 `--headless` to drive the login through the screenshot/control relay. The daemon is intentionally
 loopback by default; use a private authenticated backend or tunnel rather than exposing it publicly.
 
+### Browser memory budget
+
+Outlook web automation uses one shared Chromium slot by default across Surface processes and
+accounts. Hosted login, reads, drafts, sends, and warm sessions all acquire it before launching a
+browser; a concurrent operation returns retryable `browser_busy` JSON. Surface closes the browser
+after command completion or failure, gives ordinary browser commands a 45-second deadline, and
+defaults hosted auth to five minutes of real interaction inactivity inside its 20-minute maximum.
+Viewer screenshots and status checks do not prolong that inactivity period.
+
+Set `BROWSER_AUTOMATION_LEASE_DIR` to a private shared path when another browser CLI should use the
+same budget. `BROWSER_AUTOMATION_MAX_ACTIVE=1` is the conservative default; configure the same
+value for every participant. See [the CLI contract](docs/cli-contract.md#browser-automation-capacity)
+for the timeout variables and stale-process behavior. Surface only reaps a marker-tagged browser
+tree it launched itself; it never kills arbitrary Chrome processes.
+
 For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
 stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
 client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.

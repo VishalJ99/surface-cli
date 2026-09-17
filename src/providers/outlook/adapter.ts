@@ -92,8 +92,7 @@ async function withManagedOutlookSession<T>(
   try {
     return await work(session);
   } finally {
-    await session.context.close();
-    session.cleanup?.();
+    await session.close();
   }
 }
 
@@ -1801,8 +1800,7 @@ async function mutateOutlookReadState(
       await performOutlookReadStateAction(session, target.locator, unread, context.config.providerTimeoutMs);
     }
   } finally {
-    await session.context.close();
-    session.cleanup?.();
+    await session.close();
   }
 
   const threadRefs = targets.map((target) => target.stored.thread_ref);
@@ -1826,15 +1824,14 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
 
   async login(account: MailAccount, context: ProviderContext): Promise<AuthStatus> {
     const profileDir = outlookProfileDir(context);
-    const session = await launchOutlookSession(profileDir, { headless: false });
+    const session = await launchOutlookSession(profileDir, { headless: false, purpose: "interactive" });
 
     try {
       await session.page.goto("https://outlook.office.com/mail/", { waitUntil: "domcontentloaded" });
       await promptForOutlookLogin(profileDir);
       return await probeOutlookAuth(session.page, { timeoutMs: context.config.providerTimeoutMs });
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
   }
 
@@ -1871,8 +1868,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
             : "Could not probe Outlook auth state.",
       };
     } finally {
-      await session?.context.close();
-      session?.cleanup?.();
+      await session?.close();
     }
   }
 
@@ -1951,8 +1947,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     try {
       await performOutlookRsvpAction(session, locator, response, context.config.providerTimeoutMs);
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     const refreshed = await refreshStoredMessage(account, messageRef, context);
@@ -2028,8 +2023,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     const resolved = await findResolvedSearchTarget(account, normalizedInput.subject, context);
@@ -2082,8 +2076,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillComposeBody(session.page, normalizedInput.body);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     await refreshOutlookConversation(account, target.locator.conversation_id, context);
@@ -2137,8 +2130,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillComposeBody(session.page, normalizedInput.body);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     await refreshOutlookConversation(account, target.locator.conversation_id, context);
@@ -2204,8 +2196,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       forwardedSubject = await session.page.locator('input[aria-label="Subject"]').inputValue();
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     const resolved = await findResolvedSearchTarget(account, forwardedSubject, context);
@@ -2250,8 +2241,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await session.page.locator('button[aria-label="Archive"]').first().click();
       await session.page.waitForTimeout(2_500);
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     context.db.markThreadArchived(target.stored.thread_ref);
@@ -2303,8 +2293,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       savedTo = join(downloadDir, `${attachmentId}__${filename}`);
       writeFileSync(savedTo, await response.body());
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await session.close();
     }
 
     context.db.updateAttachmentSavedTo(attachmentId, savedTo);

@@ -780,6 +780,11 @@ authCommand
       .argParser(positiveInt)
       .default(hostedAuthDefaults.ttlSeconds),
   )
+  .addOption(
+    new Option("--idle-timeout-seconds <seconds>", "Maximum inactivity before a hosted browser auth session closes")
+      .argParser(positiveInt)
+      .default(hostedAuthDefaults.idleTimeoutSeconds),
+  )
   .option("--headless", "Run Chrome headlessly; screenshot and interaction endpoints remain available", false)
   .action(async (accountName: string, options, command: Command) => {
     await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
@@ -796,6 +801,7 @@ authCommand
         context,
         token,
         ttlSeconds: options.ttlSeconds,
+        idleTimeoutSeconds: options.idleTimeoutSeconds,
         headless: Boolean(options.headless),
         expectedEmails: options.expectedEmail,
         host: options.host,

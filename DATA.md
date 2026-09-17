@@ -4,3 +4,7 @@
 - `src/hosted-auth.ts` — Persistent, bearer-protected Outlook browser-auth daemon with isolated candidate profiles and safe promotion.
 - `src/hosted-auth.test.ts` — Hosted-auth lifecycle, replay, identity, close-failure, lock, cleanup, HTTP, and browser-fixture tests.
 - `docs/decisions/0046-hosted-outlook-browser-auth-daemon.md` — Rationale and deployment contract for hosted Outlook browser authentication.
+- `src/lib/browser-capacity.ts` — Private SQLite lease ledger and same-UID Chromium recovery for the shared Surface browser budget.
+- `src/lib/browser-capacity.test.ts` — Lease contention, stale-owner, descendant-preservation, and configuration tests.
+- `src/providers/outlook/browser-lifecycle.test.ts` — Local no-mail Chromium lifecycle and failed-launch cleanup tests.
+- `docs/decisions/0047-bounded-shared-browser-automation-capacity.md` — PER-510 browser-capacity, deadline, and stale-process decision.

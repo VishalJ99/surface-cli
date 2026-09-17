@@ -14,6 +14,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { MailAccount } from "./contracts/account.js";
+import { browserAutomationRuntimeConfig } from "./lib/browser-capacity.js";
 import { SurfaceError } from "./lib/errors.js";
 import { makeAuthSessionId } from "./refs.js";
 import type { AccountRuntimeContext } from "./runtime.js";
@@ -28,6 +29,7 @@ import type { AuthStatus } from "./providers/types.js";
 const DEFAULT_AUTH_SESSION_TTL_SECONDS = 20 * 60;
 const MAX_ACTION_TEXT_LENGTH = 512;
 const MAX_REQUEST_BYTES = 4 * 1024;
+const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_SCREENSHOT_DIMENSION = 4_096;
 const MAX_SCROLL_DELTA = 2_000;
 const AUTH_SESSION_ID_PATTERN = /^auth_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -60,9 +62,11 @@ export type HostedAuthStatus =
 
 type HostedAuthReason =
   | "browser_start_failed"
+  | "browser_busy"
   | "browser_close_failed"
   | "cancelled_by_client"
   | "session_expired"
+  | "session_idle_expired"
   | "profile_promotion_failed";
 
 export type HostedAuthIdentityStatus =
@@ -113,6 +117,7 @@ export interface HostedAuthServiceOptions {
   context: AccountRuntimeContext;
   token: string;
   ttlSeconds?: number;
+  idleTimeoutSeconds?: number;
   headless?: boolean;
   outlookUrl?: string;
   expectedEmails?: string[];
@@ -129,6 +134,8 @@ interface HostedAuthSession {
   sessionId: string;
   status: HostedAuthStatus;
   expiresAtMs: number;
+  idleExpiresAtMs: number;
+  lastInteractionAtMs: number;
   candidateDir: string;
   candidateProfileDir: string;
   browser: HostedAuthBrowser | null;
@@ -237,7 +244,7 @@ function publicStatus(account: HostedAuthServiceOptions["account"], session: Hos
     transport: "outlook-web-playwright",
     session_id: session.sessionId,
     status: session.status,
-    expires_at: new Date(session.expiresAtMs).toISOString(),
+    expires_at: new Date(Math.min(session.expiresAtMs, session.idleExpiresAtMs)).toISOString(),
   };
   if (session.reason) {
     result.reason = session.reason;
@@ -262,7 +269,10 @@ class PlaywrightHostedAuthBrowser implements HostedAuthBrowser {
     headless: boolean;
     outlookUrl: string;
   }): Promise<PlaywrightHostedAuthBrowser> {
-    const session = await launchOutlookSession(options.profileDir, { headless: options.headless });
+    const session = await launchOutlookSession(options.profileDir, {
+      headless: options.headless,
+      purpose: "auth",
+    });
     try {
       await session.page.goto(options.outlookUrl, {
         waitUntil: "domcontentloaded",
@@ -316,8 +326,7 @@ class PlaywrightHostedAuthBrowser implements HostedAuthBrowser {
   }
 
   async close(): Promise<void> {
-    await this.session.context.close();
-    this.session.cleanup?.();
+    await this.session.close();
   }
 }
 
@@ -337,6 +346,7 @@ export class HostedOutlookAuthService {
   private readonly context: AccountRuntimeContext;
   private readonly token: string;
   private readonly ttlMs: number;
+  private readonly idleTimeoutMs: number;
   private readonly headless: boolean;
   private readonly outlookUrl: string;
   private readonly browserFactory: HostedAuthBrowserFactory;
@@ -365,6 +375,10 @@ export class HostedOutlookAuthService {
     this.context = options.context;
     this.token = options.token;
     this.ttlMs = (options.ttlSeconds ?? DEFAULT_AUTH_SESSION_TTL_SECONDS) * 1_000;
+    this.idleTimeoutMs = (options.idleTimeoutSeconds ?? browserAutomationRuntimeConfig().authIdleTimeoutMs / 1_000) * 1_000;
+    if (!Number.isFinite(this.ttlMs) || this.ttlMs <= 0 || !Number.isFinite(this.idleTimeoutMs) || this.idleTimeoutMs <= 0) {
+      throw new SurfaceError("invalid_configuration", "Hosted auth lifetimes must be positive.");
+    }
     this.headless = options.headless ?? false;
     this.outlookUrl = options.outlookUrl ?? "https://outlook.office.com/mail/";
     this.browserFactory = options.browserFactory ?? playwrightHostedAuthBrowserFactory;
@@ -571,10 +585,13 @@ export class HostedOutlookAuthService {
   }
 
   private expireIfDue(session: HostedAuthSession): boolean {
-    if (Date.now() < session.expiresAtMs) {
-      return false;
-    }
-    return true;
+    return Date.now() >= Math.min(session.expiresAtMs, session.idleExpiresAtMs);
+  }
+
+  private expiryReason(session: HostedAuthSession): HostedAuthReason {
+    return Date.now() >= session.idleExpiresAtMs && session.idleExpiresAtMs < session.expiresAtMs
+      ? "session_idle_expired"
+      : "session_expired";
   }
 
   private async expire(session: HostedAuthSession): Promise<void> {
@@ -582,7 +599,7 @@ export class HostedOutlookAuthService {
       return;
     }
     session.status = "expired";
-    session.reason = "session_expired";
+    session.reason = this.expiryReason(session);
     await this.cleanupCandidate(session);
     this.clearActiveSession(session);
   }
@@ -605,7 +622,10 @@ export class HostedOutlookAuthService {
   }
 
   private scheduleExpiry(session: HostedAuthSession): void {
-    const delay = Math.max(0, session.expiresAtMs - Date.now());
+    if (session.expiryTimer) {
+      clearTimeout(session.expiryTimer);
+    }
+    const delay = Math.max(0, Math.min(session.expiresAtMs, session.idleExpiresAtMs) - Date.now());
     session.expiryTimer = setTimeout(() => {
       void this.runSerialized(async () => {
         if (this.expireIfDue(session)) {
@@ -665,6 +685,8 @@ export class HostedOutlookAuthService {
       sessionId,
       status: "starting",
       expiresAtMs: Date.now() + this.ttlMs,
+      idleExpiresAtMs: Date.now() + this.idleTimeoutMs,
+      lastInteractionAtMs: Date.now(),
       candidateDir,
       candidateProfileDir,
       browser: null,
@@ -685,7 +707,7 @@ export class HostedOutlookAuthService {
     const session = this.sessionById(sessionId);
     if (this.expireIfDue(session) && !["authenticated", "cancelled", "expired", "failed"].includes(session.status)) {
       session.status = "expired";
-      session.reason = "session_expired";
+      session.reason = this.expiryReason(session);
       this.clearActiveSession(session);
       void this.runSerialized(() => this.cleanupCandidate(session));
     }
@@ -715,7 +737,11 @@ export class HostedOutlookAuthService {
         throw new SurfaceError("auth_expired", "Hosted auth session has expired.", { account: this.account.name });
       }
       this.assertInteractive(session);
-      return session.browser!.screenshot();
+      const screenshot = await session.browser!.screenshot();
+      if (screenshot.byteLength > MAX_SCREENSHOT_BYTES) {
+        throw new SurfaceError("transport_error", "Browser screenshot exceeded the safe size limit.");
+      }
+      return screenshot;
     });
   }
 
@@ -762,6 +788,12 @@ export class HostedOutlookAuthService {
           break;
         }
       }
+
+      // Viewer polling is intentionally not activity. Only a completed user browser action earns
+      // another short idle window, and the fixed maximum session lifetime still wins.
+      session.lastInteractionAtMs = Date.now();
+      session.idleExpiresAtMs = Math.min(session.expiresAtMs, session.lastInteractionAtMs + this.idleTimeoutMs);
+      this.scheduleExpiry(session);
 
       return publicStatus(this.account, session);
     });
@@ -1015,6 +1047,8 @@ function safeHttpStatus(error: unknown): { statusCode: number; code: string; mes
       return { statusCode: 410, code: "auth_expired", message: "Hosted auth session has expired." };
     case "session_invalid":
       return { statusCode: 409, code: "session_invalid", message: "Hosted auth session is not accepting that action." };
+    case "browser_busy":
+      return { statusCode: 409, code: "browser_busy", message: "Browser capacity is busy; retry shortly." };
     case "invalid_argument":
       return { statusCode: 400, code: "invalid_argument", message: error.message };
     default:
@@ -1187,5 +1221,6 @@ export function readHostedAuthToken(options: { tokenFile?: string; environment?:
 
 export const hostedAuthDefaults = {
   ttlSeconds: DEFAULT_AUTH_SESSION_TTL_SECONDS,
+  idleTimeoutSeconds: browserAutomationRuntimeConfig().authIdleTimeoutMs / 1_000,
   maxActionTextLength: MAX_ACTION_TEXT_LENGTH,
 };

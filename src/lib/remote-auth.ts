@@ -684,7 +684,7 @@ async function runRemoteOutlookLogin(
   context: RuntimeContext,
 ): Promise<RemoteAuthLoginEnvelope> {
   const localProfileDir = localRemoteOutlookProfileDir(account.name);
-  const session = await launchOutlookSession(localProfileDir, { headless: false });
+  const session = await launchOutlookSession(localProfileDir, { headless: false, purpose: "interactive" });
 
   try {
     await session.page.goto("https://outlook.office.com/mail/", { waitUntil: "domcontentloaded" });
@@ -700,8 +700,7 @@ async function runRemoteOutlookLogin(
       );
     }
   } finally {
-    await session.context.close();
-    session.cleanup?.();
+    await session.close();
   }
 
   const surfaceRoot = await resolveRemoteSurfaceRoot(remoteHost);

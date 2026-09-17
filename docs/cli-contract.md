@@ -24,7 +24,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface account identity set <account> [--email <email>] [--name <name>] [--email-alias <email>]... [--name-alias <name>]... [--clear-email-aliases] [--clear-name-aliases]`
 - `surface account remove <account>`
 - `surface auth login <account> [--remember-me] [--remote-host <host>]`
-- `surface auth serve <account> --host <host> --port <port> [--auth-token-file <path>] [--expected-email <email>]... [--ttl-seconds <seconds>] [--headless]`
+- `surface auth serve <account> --host <host> --port <port> [--auth-token-file <path>] [--expected-email <email>]... [--ttl-seconds <seconds>] [--idle-timeout-seconds <seconds>] [--headless]`
 - `surface auth status [account]`
 - `surface auth check [account] [--interval <seconds>] [--due-only] [--remembered-only] [--login-if-stale]`
 - `surface auth logout <account>`
@@ -151,15 +151,49 @@ Hosted Outlook browser auth notes:
   the fixed browser viewport; text is limited to 512 characters; keys are allowlisted; each scroll
   axis is limited to 2000 pixels. Screenshot bytes are intentional authenticated viewer content,
   not stdout JSON.
-- Sessions have a fixed TTL (20 minutes by default). Expiry, cancellation, daemon shutdown, and an
+- Sessions have a fixed TTL (20 minutes by default) and a five-minute inactivity timeout by
+  default. Only successful click, type, key, or scroll actions reset the inactivity timer; status
+  and screenshot polling do not. Expiry, cancellation, daemon shutdown, and an
   unsuccessful probe retain the active profile. Candidate cleanup only removes a profile after its
   browser closes; a close failure is reported as `browser_close_failed` and leaves it for safe
   retry/recovery. One daemon lock owns each account profile, and startup prunes only direct,
   valid, expired, no-longer-referenced candidate directories.
 - The service reports only safe HTTP errors: 401 `forbidden`, 404 `not_found`, 409
-  `auth_pending`/`session_invalid`, 410 `auth_expired`, 400 `invalid_argument`, or 500
+  `auth_pending`/`session_invalid`/`browser_busy`, 410 `auth_expired`, 400 `invalid_argument`, or 500
   `internal_error`. It does not expose cookies, candidate paths, request bodies, typed text, or
   service-token values.
+
+### Browser automation capacity
+
+Surface owns a small, cross-process Chromium budget for every Outlook Playwright context: hosted
+auth candidates, stateless read/write commands, and opt-in warm sessions. It defaults to one
+active Surface-owned browser. A second command returns the retryable JSON error `browser_busy`; a
+command deadline returns retryable `browser_deadline_exceeded`. Surface does not wait indefinitely or inspect unrelated user Chrome processes.
+
+The shared lease root is `BROWSER_AUTOMATION_LEASE_DIR`, defaulting to
+`${XDG_STATE_HOME:-~/.local/state}/browser-automation/leases`. The root must be private and owned
+by the current user. It contains a private SQLite capacity ledger with one shared budget and active
+lease records only; it contains no profile paths, mailbox addresses, cookies, or request content.
+Other browser CLIs can share the same root and participate in the same budget.
+
+Configure the shared budget before its first use with these positive-integer environment variables:
+
+- `BROWSER_AUTOMATION_MAX_ACTIVE` (default `1`, maximum `32`)
+- `BROWSER_AUTOMATION_ACQUIRE_TIMEOUT_MS` (default `750`, maximum `60000`)
+- `BROWSER_AUTOMATION_COMMAND_TIMEOUT_MS` (default `45000`, maximum `600000`)
+- `BROWSER_AUTOMATION_AUTH_IDLE_TIMEOUT_MS` (default `300000`, maximum `3600000`)
+
+`SURFACE_BROWSER_LEASE_DIR`, `SURFACE_BROWSER_MAX_ACTIVE`, and the corresponding Surface timeout
+variables remain compatibility aliases. Generic variables win when both are set. Every participant
+in one lease root must use the same maximum-active value; a mismatch fails closed instead of
+silently granting more browser slots.
+
+Command contexts close on normal completion, failure, and their deadline. Warm sessions default to
+five minutes idle and one hour maximum age. If a launcher is forcefully terminated, a later Surface
+process reclaims only its marker-tagged Chromium root and validated descendant tree. It verifies
+that every recorded owned descendant exited before freeing the lease. If process inspection is
+unavailable or a recorded PID could have been reused, the slot remains busy rather than targeting
+an arbitrary browser.
 - Use `--headless` for screenshot/control auth on hosts without a visible desktop. A headed setup
   needs an available display such as Xvfb. Surface does not bypass Microsoft MFA, conditional
   access, or device checks.
@@ -388,9 +422,9 @@ Example session start result:
     "status": "running",
     "created_at": "2026-04-20T16:53:04Z",
     "last_used_at": "2026-04-20T16:53:04Z",
-    "idle_timeout_seconds": 3600,
-    "max_age_seconds": 604800,
-    "expires_at": "2026-04-20T17:53:04.000Z"
+    "idle_timeout_seconds": 300,
+    "max_age_seconds": 3600,
+    "expires_at": "2026-04-20T16:58:04.000Z"
   }
 }
 ```

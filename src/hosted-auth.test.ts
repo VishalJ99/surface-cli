@@ -17,6 +17,17 @@ import { makeAuthSessionId } from "./refs.js";
 import type { AccountRuntimeContext } from "./runtime.js";
 
 const TOKEN = "test-token-that-is-long-enough-for-hosted-auth";
+const TEST_BROWSER_LEASE_DIR = mkdtempSync(join(tmpdir(), "surface-hosted-auth-browser-leases-"));
+const PREVIOUS_BROWSER_LEASE_DIR = process.env.BROWSER_AUTOMATION_LEASE_DIR;
+process.env.BROWSER_AUTOMATION_LEASE_DIR = TEST_BROWSER_LEASE_DIR;
+test.after(() => {
+  if (PREVIOUS_BROWSER_LEASE_DIR === undefined) {
+    delete process.env.BROWSER_AUTOMATION_LEASE_DIR;
+  } else {
+    process.env.BROWSER_AUTOMATION_LEASE_DIR = PREVIOUS_BROWSER_LEASE_DIR;
+  }
+  rmSync(TEST_BROWSER_LEASE_DIR, { recursive: true, force: true });
+});
 
 function account(): MailAccount {
   return {
@@ -154,6 +165,65 @@ async function waitForStatus(
   }
   assert.fail(`Timed out waiting for hosted auth status '${expected}'.`);
 }
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolveWait) => setTimeout(resolveWait, ms));
+}
+
+test("hosted auth idle expiry ignores status and screenshot polls but resets after a browser action", async () => {
+  const root = mkdtempSync(join(tmpdir(), "surface-hosted-auth-idle-"));
+  try {
+    const runtime = context(root);
+    const fixture = fixtureBrowserFactory("unauthenticated");
+    const service = new HostedOutlookAuthService({
+      account: runtime.account,
+      context: runtime,
+      token: TOKEN,
+      browserFactory: fixture.factory,
+      ttlSeconds: 1,
+      idleTimeoutSeconds: 0.15,
+    });
+    const session = service.begin();
+    await waitForStatus(service, session.session_id, "awaiting_browser");
+
+    await wait(80);
+    assert.equal(service.status(session.session_id).status, "awaiting_browser");
+    await service.screenshot(session.session_id);
+    await wait(80);
+    assert.equal(service.status(session.session_id).status, "expired");
+    assert.equal(service.status(session.session_id).reason, "session_idle_expired");
+    assert.equal(fixture.browsers[0]?.closed, true);
+    await service.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("hosted auth interaction extends idle only until the fixed maximum lifetime", async () => {
+  const root = mkdtempSync(join(tmpdir(), "surface-hosted-auth-max-age-"));
+  try {
+    const runtime = context(root);
+    const fixture = fixtureBrowserFactory("unauthenticated");
+    const service = new HostedOutlookAuthService({
+      account: runtime.account,
+      context: runtime,
+      token: TOKEN,
+      browserFactory: fixture.factory,
+      ttlSeconds: 0.18,
+      idleTimeoutSeconds: 1,
+    });
+    const session = service.begin();
+    await waitForStatus(service, session.session_id, "awaiting_browser");
+    await wait(90);
+    await service.interact(session.session_id, "click", { x: 1, y: 1 });
+    await wait(120);
+    assert.equal(service.status(session.session_id).status, "expired");
+    assert.equal(service.status(session.session_id).reason, "session_expired");
+    await service.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("hosted auth begin is replay-safe and only promotes a probed candidate profile", async () => {
   const root = mkdtempSync(join(tmpdir(), "surface-hosted-auth-"));

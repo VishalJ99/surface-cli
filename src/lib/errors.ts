@@ -10,6 +10,10 @@ export interface ErrorEnvelope {
   };
 }
 
+// Playwright carries this close reason into interrupted operations. Keep it internal and map it
+// to a safe public error instead of exposing an engine-specific target-closed message.
+export const BROWSER_COMMAND_DEADLINE_REASON = "surface_browser_command_deadline";
+
 export class SurfaceError extends Error {
   readonly code: string;
   readonly retryable: boolean;
@@ -53,6 +57,19 @@ export function errorToEnvelope(error: unknown): ErrorEnvelope {
   }
 
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes(BROWSER_COMMAND_DEADLINE_REASON)) {
+    return {
+      schema_version: "1",
+      error: {
+        code: "browser_deadline_exceeded",
+        message: "Browser command timed out; retry shortly.",
+        retryable: true,
+        account: null,
+        message_ref: null,
+        thread_ref: null,
+      },
+    };
+  }
   return {
     schema_version: "1",
     error: {

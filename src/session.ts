@@ -20,8 +20,10 @@ import { makeSessionId } from "./refs.js";
 import type { AccountRuntimeContext, RuntimeContext } from "./runtime.js";
 import type { StoredSessionRecord } from "./state/database.js";
 
-export const DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 60 * 60;
-export const DEFAULT_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+// Warm Outlook sessions retain a Chromium process. Keep the default useful for a small burst of
+// reads while ensuring unattended CLI sessions cannot reserve memory for a working day or week.
+export const DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 5 * 60;
+export const DEFAULT_SESSION_MAX_AGE_SECONDS = 60 * 60;
 
 const SESSION_STARTUP_TIMEOUT_MS = 20_000;
 const SESSION_POLL_INTERVAL_MS = 200;

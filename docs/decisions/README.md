@@ -66,3 +66,6 @@ Use zero-padded sequential numbers:
 - `0042-imap-auth-uses-provider-presets.md`
 - `0043-remembered-auth-uses-project-dotenv.md`
 - `0044-remembered-auth-uses-surface-state.md`
+- `0045-prune-outlook-temp-browser-profiles.md`
+- `0046-hosted-outlook-browser-auth-daemon.md`
+- `0047-bounded-shared-browser-automation-capacity.md`

@@ -17,6 +17,11 @@ import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js"
 import { sessionExpiry } from "./session.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_SESSION_REQUEST_BYTES = 64 * 1024;
+const MAX_SESSION_RESPONSE_BYTES = 1024 * 1024;
+const MAX_QUEUED_SESSION_REQUESTS = 8;
+const MAX_OPEN_SESSION_SOCKETS = 16;
+const SESSION_SOCKET_READ_TIMEOUT_MS = 15_000;
 
 interface DeadlineTimer {
   clear(): void;
@@ -107,6 +112,8 @@ async function main(): Promise<void> {
   let idleTimer: DeadlineTimer | undefined;
   let maxAgeTimer: DeadlineTimer | undefined;
   let inflight = Promise.resolve();
+  let queuedRequests = 0;
+  let openSockets = 0;
   let session: Awaited<ReturnType<typeof launchOutlookSession>> | undefined;
   let server: ReturnType<typeof createServer> | undefined;
 
@@ -161,11 +168,10 @@ async function main(): Promise<void> {
 
     if (session) {
       try {
-        await session.context.close();
+        await session.close();
       } catch {
         // Ignore close failures during shutdown.
       }
-      session.cleanup?.();
     }
 
     if (existsSync(args.socketPath)) {
@@ -197,7 +203,10 @@ async function main(): Promise<void> {
       rmSync(args.socketPath, { force: true });
     }
 
-    session = await launchOutlookSession(context.accountPaths.authDir + "/profile", { headless: true });
+    session = await launchOutlookSession(context.accountPaths.authDir + "/profile", {
+      headless: true,
+      purpose: "warm",
+    });
     const auth = await probeOutlookAuth(session.page, { timeoutMs: context.config.providerTimeoutMs });
     if (auth.status !== "authenticated") {
       throw new SurfaceError("reauth_required", auth.detail ?? "Outlook session is not authenticated.", {
@@ -206,12 +215,50 @@ async function main(): Promise<void> {
     }
 
     server = createServer({ allowHalfOpen: true }, (socket) => {
+      if (openSockets >= MAX_OPEN_SESSION_SOCKETS) {
+        socket.end(JSON.stringify({ ok: false, error: errorToEnvelope(
+          new SurfaceError("browser_busy", "Warm session is busy; retry shortly.", { retryable: true }),
+        ).error }));
+        return;
+      }
+      openSockets += 1;
+      let socketClosed = false;
+      socket.once("close", () => {
+        if (!socketClosed) {
+          socketClosed = true;
+          openSockets -= 1;
+        }
+      });
+      socket.setTimeout(SESSION_SOCKET_READ_TIMEOUT_MS, () => socket.destroy());
       let raw = "";
+      let requestTooLarge = false;
       socket.setEncoding("utf8");
       socket.on("data", (chunk) => {
+        if (requestTooLarge) {
+          return;
+        }
+        if (Buffer.byteLength(raw) + Buffer.byteLength(chunk) > MAX_SESSION_REQUEST_BYTES) {
+          requestTooLarge = true;
+          socket.destroy();
+          return;
+        }
         raw += chunk;
       });
       socket.on("end", () => {
+        socket.setTimeout(0);
+        if (requestTooLarge) {
+          socket.end(JSON.stringify({ ok: false, error: errorToEnvelope(
+            new SurfaceError("invalid_argument", "Session request is too large."),
+          ).error }));
+          return;
+        }
+        if (queuedRequests >= MAX_QUEUED_SESSION_REQUESTS) {
+          socket.end(JSON.stringify({ ok: false, error: errorToEnvelope(
+            new SurfaceError("browser_busy", "Warm session is busy; retry shortly.", { retryable: true }),
+          ).error }));
+          return;
+        }
+        queuedRequests += 1;
         inflight = inflight.then(async () => {
           try {
             const request = JSON.parse(raw) as {
@@ -300,9 +347,15 @@ async function main(): Promise<void> {
                 });
             }
 
-            socket.end(JSON.stringify({ ok: true, result }));
+            const response = JSON.stringify({ ok: true, result });
+            if (Buffer.byteLength(response) > MAX_SESSION_RESPONSE_BYTES) {
+              throw new SurfaceError("transport_error", "Session response exceeded the safe size limit.");
+            }
+            socket.end(response);
           } catch (error) {
             socket.end(JSON.stringify({ ok: false, error: errorToEnvelope(error).error }));
+          } finally {
+            queuedRequests -= 1;
           }
         });
       });
