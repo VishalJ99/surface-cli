@@ -128,6 +128,38 @@ test("browser leases preserve an uncaptured stale launch instead of freeing an u
   }
 });
 
+test("browser-close release reaps a captured descendant after the marker root has crashed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "surface-browser-capacity-close-orphan-"));
+  try {
+    let markerVisible = true;
+    let childAlive = true;
+    let terminated: BrowserProcessIdentity[] | undefined;
+    const lease = await manager(root, {
+      dependencies: {
+        findMarkedBrowserPids: () => (markerVisible && childAlive ? [444] : []),
+        lookupProcessStartTimes: (pids) => new Map(
+          pids.filter((pid) => pid !== 444 || childAlive).map((pid) => [pid, "test-start"]),
+        ),
+        terminateCapturedBrowserProcesses: async (processes) => {
+          terminated = processes;
+          childAlive = false;
+          return true;
+        },
+      },
+    }).acquire();
+    await lease.captureOwnedProcessTree();
+    // The marker-owning browser root is gone, but its captured renderer survives. This mirrors a
+    // context close/crash event that must not delete the ledger row before child cleanup.
+    markerVisible = false;
+    await lease.releaseAfterBrowserClose();
+    assert.deepEqual(terminated, [{ pid: 444, startedAt: "test-start" }]);
+    const replacement = await manager(root).acquire();
+    await replacement.release();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("browser leases reap a matching recorded descendant after its marked root has disappeared", async () => {
   const root = mkdtempSync(join(tmpdir(), "surface-browser-capacity-descendant-"));
   try {

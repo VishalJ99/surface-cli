@@ -68,12 +68,14 @@ export async function launchOutlookSession(
 ): Promise<OutlookSession> {
   const purpose = options.purpose ?? "command";
   const lease = await acquireSurfaceBrowserLease(purpose === "auth" ? "auth" : purpose === "warm" ? "warm" : "command");
-  mkdirSync(profileDir, { recursive: true });
   let effectiveProfileDir = profileDir;
   let cleanup: (() => void) | undefined;
   let launchedContext: BrowserContext | undefined;
 
   try {
+    // Keep profile preparation inside the lease cleanup boundary. A filesystem failure before a
+    // Playwright launch must not leave a capacity row owned by this process.
+    mkdirSync(profileDir, { recursive: true });
     if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
       try {
         pruneOutlookTempProfiles();
@@ -105,7 +107,7 @@ export async function launchOutlookSession(
     let closePromise: Promise<void> | undefined;
     let releasePromise: Promise<void> | undefined;
     const releaseLease = (): Promise<void> => {
-      releasePromise ??= lease.release();
+      releasePromise ??= lease.releaseAfterBrowserClose();
       return releasePromise;
     };
     const clearDeadline = () => {
@@ -132,8 +134,9 @@ export async function launchOutlookSession(
     };
     context.once("close", () => {
       clearDeadline();
-      // A browser crash has already closed Chrome. Reclaim the capacity slot even when the normal
-      // caller never reaches its finally block.
+      // A browser crash can leave renderer children behind after the marker-owning root exits.
+      // This release scans and reaps only the captured same-UID marker tree; a failed scan keeps
+      // the lease fail-closed instead of making capacity available too early.
       void releaseLease().catch(() => undefined);
     });
     if (purpose === "command") {
@@ -156,7 +159,7 @@ export async function launchOutlookSession(
       try {
         await launchedContext.close();
         cleanup?.();
-        await lease.release();
+        await lease.releaseAfterBrowserClose();
       } catch {
         // A context that cannot close may still own Chromium/profile files. Retain the incomplete
         // lease for fail-closed recovery rather than freeing its capacity slot.

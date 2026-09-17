@@ -60,6 +60,9 @@ export interface BrowserLeaseManagerOptions {
 export interface BrowserLease {
   readonly id: string;
   readonly marker: string;
+  // If Playwright created a context, use this rather than a direct release. It verifies that the
+  // marker-tagged, start-fingerprinted Chromium tree is gone (and reaps only that tree if needed).
+  releaseAfterBrowserClose(): Promise<void>;
   release(): Promise<void>;
   releaseAfterFailedLaunch(): Promise<void>;
   captureOwnedProcessTree(): Promise<void>;
@@ -173,6 +176,7 @@ function markedBrowserPids(marker: string): number[] | null {
     const output = execFileSync("ps", ["-axo", "uid=,pid=,ppid=,lstart=,command="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, LC_ALL: "C" },
     });
     const processes: ProcessEntry[] = output.split("\n").flatMap((line) => {
       const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.{24})\s+(.*)$/u.exec(line);
@@ -235,6 +239,7 @@ function processStartTimes(pids: number[]): Map<number, string> | null {
     const output = execFileSync("ps", ["-axo", "uid=,pid=,lstart="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, LC_ALL: "C" },
     });
     const result = new Map<number, string>();
     for (const line of output.split("\n")) {
@@ -529,7 +534,9 @@ export class BrowserLeaseManager {
       if (!result.staleProcesses) {
         const record = result.record!;
         let released = false;
-        const release = async (): Promise<void> => {
+        let capturedProcesses: BrowserProcessIdentity[] | undefined;
+        let verifiedReleasePromise: Promise<void> | undefined;
+        const releaseRow = async (): Promise<void> => {
           if (released) {
             return;
           }
@@ -552,9 +559,116 @@ export class BrowserLeaseManager {
             database?.close();
           }
         };
+        const releaseAfterBrowserClose = (): Promise<void> => {
+          if (released) {
+            return Promise.resolve();
+          }
+          if (verifiedReleasePromise) {
+            return verifiedReleasePromise;
+          }
+          const pending = (async () => {
+            if (!capturedProcesses || capturedProcesses.length === 0) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            const markedPids = this.dependencies.findMarkedBrowserPids(record.marker);
+            if (markedPids === null) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            const starts = this.dependencies.lookupProcessStartTimes([
+              ...capturedProcesses.map((processEntry) => processEntry.pid),
+              ...markedPids,
+            ]);
+            if (starts === null) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            for (const processEntry of capturedProcesses) {
+              const currentStart = starts.get(processEntry.pid);
+              if (currentStart !== undefined && currentStart !== processEntry.startedAt) {
+                // A PID might have been reused by an unrelated program. Preserve the lease rather
+                // than risking a signal to it.
+                throw new SurfaceError(
+                  "browser_busy",
+                  "Browser close could not be verified; retry shortly.",
+                  { retryable: true },
+                );
+              }
+            }
+            const ownedByPid = new Map<number, BrowserProcessIdentity>();
+            for (const processEntry of capturedProcesses) {
+              if (starts.has(processEntry.pid)) {
+                ownedByPid.set(processEntry.pid, processEntry);
+              }
+            }
+            for (const pid of markedPids) {
+              const startedAt = starts.get(pid);
+              if (startedAt) {
+                ownedByPid.set(pid, { pid, startedAt });
+              }
+            }
+            if (ownedByPid.size > 0 && !(await this.dependencies.terminateCapturedBrowserProcesses([...ownedByPid.values()]))) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            // Re-inspect every captured identity and the marker root/tree after reaping. A
+            // release is safe only if neither scan can still identify an owned Chromium process.
+            const remainingMarked = this.dependencies.findMarkedBrowserPids(record.marker);
+            if (remainingMarked === null) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            const remainingStarts = this.dependencies.lookupProcessStartTimes([
+              ...capturedProcesses.map((processEntry) => processEntry.pid),
+              ...remainingMarked,
+            ]);
+            if (remainingStarts === null) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            if (remainingMarked.length > 0 || capturedProcesses.some((processEntry) => remainingStarts.has(processEntry.pid))) {
+              throw new SurfaceError(
+                "browser_busy",
+                "Browser close could not be verified; retry shortly.",
+                { retryable: true },
+              );
+            }
+            await releaseRow();
+          })();
+          verifiedReleasePromise = pending;
+          void pending.catch(() => {
+            // Let an explicit close path retry a transient inspection or SQLite failure. The lease
+            // remains present and fail-closed until one verified attempt deletes it.
+            if (!released && verifiedReleasePromise === pending) {
+              verifiedReleasePromise = undefined;
+            }
+          });
+          return pending;
+        };
+        const release = (): Promise<void> => capturedProcesses ? releaseAfterBrowserClose() : releaseRow();
         return {
           id: record.lease_id,
           marker: record.marker,
+          releaseAfterBrowserClose,
           release,
           releaseAfterFailedLaunch: async () => {
             const markedPids = this.dependencies.findMarkedBrowserPids(record.marker);
@@ -584,7 +698,7 @@ export class BrowserLeaseManager {
                 { retryable: true },
               );
             }
-            await release();
+            await releaseRow();
           },
           captureOwnedProcessTree: async () => {
             const pids = this.dependencies.findMarkedBrowserPids(record.marker);
@@ -611,6 +725,7 @@ export class BrowserLeaseManager {
               if (updated.changes !== 1) {
                 throw new SurfaceError("invalid_configuration", "Browser lease ownership changed unexpectedly.");
               }
+              capturedProcesses = processes;
             } catch (error) {
               if (sqliteBusy(error)) {
                 throw new SurfaceError("browser_busy", "Browser capacity is busy; retry shortly.", { retryable: true });

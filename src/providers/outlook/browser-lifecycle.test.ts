@@ -61,6 +61,33 @@ test("repeated local Chromium command sessions release capacity and their deadli
         await next.release();
       }
 
+      // Some callers only observe Playwright's context-close event (for example a browser crash)
+      // rather than reaching OutlookSession.close(). That event must still run the verified lease
+      // release before another command can acquire the one-browser budget.
+      const eventClosedSession = await launchOutlookSession(profileDir, {
+        headless: true,
+        purpose: "command",
+        commandTimeoutMs: 5_000,
+      });
+      await eventClosedSession.context.close();
+      let eventReleased = false;
+      // Verified close may need the bounded 750 ms SIGTERM and 250 ms SIGKILL windows when
+      // Playwright's root process exits before a captured child.
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          const next = await new BrowserLeaseManager({ leaseDir, maxActive: 1 }).acquire();
+          await next.release();
+          eventReleased = true;
+          break;
+        } catch (error) {
+          if (!(error instanceof Error && "code" in error && error.code === "browser_busy")) {
+            throw error;
+          }
+          await wait(50);
+        }
+      }
+      assert.equal(eventReleased, true);
+
       const deadlineSession = await launchOutlookSession(profileDir, {
         headless: true,
         purpose: "command",

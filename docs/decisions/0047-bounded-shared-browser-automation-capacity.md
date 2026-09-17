@@ -30,12 +30,12 @@ the same limit for one root. Contention and SQLite busy states return retryable 
 without waiting indefinitely.
 
 Every Surface Chromium root receives a random inert command-line marker. At launch, Surface records
-the marker's current same-UID descendant tree. It releases the lease only after Playwright confirms
-the context is closed. On later recovery, Surface reclaims a dead parent's lease only when the
-marker tree and every recorded descendant have exited. If a marker tree remains, Surface uses a
-bounded `SIGTERM` then `SIGKILL` sequence only for that same-UID, marker-owned tree and verifies its
-exit. A recorded live PID without its marker is preserved as busy, because it may have been reused;
-Surface never signals it. Unavailable process inspection also preserves the slot.
+the marker's current same-UID descendant tree with each process's start-time fingerprint. Both the
+normal context-close path and later dead-parent recovery run the same verification before deleting a
+lease. If the marker tree or a recorded descendant remains with the recorded fingerprint, Surface
+uses a bounded `SIGTERM` then `SIGKILL` sequence only for that same-UID captured process set and
+verifies every member has exited. A fingerprint mismatch is a possible PID reuse and preserves the
+slot; Surface never signals it. Unavailable process inspection also preserves the slot.
 
 Stateless Outlook browser commands have a configurable 45-second default deadline.
 `surface auth serve` is exempt from that command deadline but has a 20-minute fixed lifetime and a
