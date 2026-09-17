@@ -170,6 +170,54 @@ function classifyAuthBody(text: string, pageUrl: string): AuthStatus {
   return { status: "unknown", detail: "Could not determine whether Outlook is authenticated." };
 }
 
+function normalizedUiEmail(value: string): string | null {
+  const match = value.match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/iu);
+  return match ? match[0]!.toLowerCase() : null;
+}
+
+// The Outlook Web shell does not expose a stable mailbox-identity API. Read only Microsoft account
+// control elements, never document-wide email-looking labels or message text. A missing value is an
+// honest unknown, not confirmation of the configured email.
+export async function extractOutlookUiIdentity(page: Page): Promise<string | null> {
+  const accountControls = '[data-automationid="mectrl_currentAccount_primary"], [data-automationid="mectrl_currentAccount_secondary"], [data-automationid="mectrl_account_email"]';
+  const readValues = async (): Promise<string[]> => page
+    .locator(accountControls)
+    .evaluateAll((elements) => elements.slice(0, 12).flatMap((element) => {
+      const candidates = [
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+        element.textContent,
+      ];
+      return candidates
+        .filter((candidate): candidate is string => typeof candidate === "string")
+        .map((candidate) => candidate.slice(0, 512));
+    }))
+    .catch(() => [] as string[]);
+
+  let values = await readValues();
+  if (values.length === 0) {
+    // On some Outlook shells this opens the account pane that owns the same mectrl controls. This
+    // selector is deliberately narrow: it must not turn a message sender or title into identity.
+    const accountMenu = page.locator('[data-automationid="mectrl_main_trigger"], #mectrl_main_trigger').first();
+    try {
+      if (await accountMenu.count()) {
+        await accountMenu.click({ timeout: 2_000 });
+        values = await readValues();
+      }
+    } catch {
+      // The UI may have no account trigger in a minimal or changed Outlook shell.
+    }
+  }
+
+  for (const value of values) {
+    const email = normalizedUiEmail(value);
+    if (email) {
+      return email;
+    }
+  }
+  return null;
+}
+
 export async function probeOutlookAuth(
   page: Page,
   options: { outlookUrl?: string; timeoutMs: number },

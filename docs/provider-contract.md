@@ -130,6 +130,20 @@ scheduled-auth hook in v1. A status other than `authenticated` is treated as sta
 automation a clear `login_command`; provider login remains the normal explicit auth flow and may
 require user consent or provider-specific secret input.
 
+### Hosted Outlook Browser Auth
+
+`surface auth serve` is a CLI/runtime lifecycle for the existing
+`outlook-web-playwright` transport, not a second provider adapter and not a mail-sync service. It
+creates a fresh candidate persistent context, supports bounded authenticated browser interaction,
+then calls the existing Outlook UI auth probe before promotion. Provider adapters continue to read
+the canonical `auth/<account_id>/profile` path only. Candidate contexts must never be treated as
+query-capable provider state until their probe is authenticated and promotion succeeds.
+
+The transport must not expose provider headers, cookies, browser-profile paths, typed input, or
+browser automation request bodies through public JSON. A hosted viewer can receive a screenshot
+only through the authenticated daemon endpoint; Surface does not assert that a remote viewer has
+access to a developer's local browser cookies.
+
 `SendMessageInput.attachments` carries files resolved by the CLI for direct `surface mail send`
 only. Each entry includes the local path for transports that need a browser upload, normalized
 filename/MIME/size metadata, and base64 bytes for API or SMTP MIME composition. Providers must keep
@@ -152,9 +166,11 @@ Providers should persist normalized thread/message state before summary generati
 reuse can be keyed from the stored canonical thread content rather than provider-native payloads.
 
 Providers should also keep account-owner identity current when they can verify it during auth.
-Gmail can update the primary identity from the authenticated Gmail profile. Outlook v1 currently
-only verifies that a browser profile reaches the mailbox UI, so user-confirmed identity may be
-required until a reliable Outlook mailbox identity extraction path exists.
+Gmail can update the primary identity from the authenticated Gmail profile. Hosted Outlook auth can
+compare a short visible account-control address with explicit expected aliases before profile
+promotion, but does not put that address in its public daemon response or upgrade configured
+account-owner identity automatically. A mailbox-UI probe without explicit aliases proves UI
+readiness only, so user-confirmed identity may still be required.
 
 Public JSON must not leak transport-specific field names unless explicitly documented.
 

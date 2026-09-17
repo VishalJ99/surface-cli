@@ -1,3 +1,6 @@
 - `.env` — Local-only dotenv file for Surface runtime overrides such as compatibility remembered-auth account names, auth-check cadence, and `SURFACE_CACHE_DIR`; ignored by git.
 - `.surface-cli/` — Optional project-local Surface state root when `SURFACE_CACHE_DIR` points inside the checkout; contains SQLite state, auth material, cache, downloads, remembered-auth state, and auth-check state; ignored by git.
 - `outputs/` — Local-only generated reports and benchmark artifacts. May contain private mailbox content; ignored by git and not suitable for repository commits.
+- `src/hosted-auth.ts` — Persistent, bearer-protected Outlook browser-auth daemon with isolated candidate profiles and safe promotion.
+- `src/hosted-auth.test.ts` — Hosted-auth lifecycle, replay, identity, close-failure, lock, cleanup, HTTP, and browser-fixture tests.
+- `docs/decisions/0046-hosted-outlook-browser-auth-daemon.md` — Rationale and deployment contract for hosted Outlook browser authentication.

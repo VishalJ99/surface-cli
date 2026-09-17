@@ -84,6 +84,11 @@ SQLite should store enough information to resolve refs and power later commands:
     <session_id>.sock
   auth/
     <account_id>/
+      profile/
+      hosted-auth/
+        <auth_session_id>/
+      hosted-auth.lock
+      hosted-auth-promotion.json
 ```
 
 SQLite is the lookup source of truth.
@@ -92,6 +97,20 @@ Use the directories this way:
 
 - `auth/`
   provider credentials or browser profiles
+- `auth/<account_id>/profile/`
+  is the active persistent Outlook browser profile used by normal Surface queries.
+- `auth/<account_id>/hosted-auth/<auth_session_id>/`
+  is a disposable, isolated candidate profile created by `surface auth serve`. It must be removed
+  on cancel, expiry, daemon shutdown, failed startup, or an unsuccessful probe. A candidate is
+  promoted only after the Outlook UI probe succeeds; it is never a fallback profile for read or
+  write commands.
+- `auth/<account_id>/hosted-auth-promotion.json`
+  is a private, short-lived promotion marker. If a process stops after moving the active profile
+  but before promotion completes, the next hosted-auth daemon restores the saved active profile.
+- `auth/<account_id>/hosted-auth.lock`
+  is an owner-only daemon lock containing only process/recovery metadata. It prevents two hosted
+  daemons from controlling the same persistent profile. A startup removes it only after its valid
+  recorded process is no longer alive.
 - `remembered-auth.json`
   local account names and check cadence for `surface auth check --remembered-only`; not raw
   provider secrets

@@ -25,3 +25,7 @@ export function makeAttachmentId(): string {
 export function makeSessionId(): string {
   return buildRef("sess");
 }
+
+export function makeAuthSessionId(): string {
+  return buildRef("auth");
+}

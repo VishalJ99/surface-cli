@@ -98,6 +98,23 @@ For remote auth, use `surface auth login <account> --remote-host <host> --rememb
 remembered-auth marker is written to the remote Surface state root after auth succeeds. No remote
 project directory is required.
 
+For an Outlook university or work account that needs to authenticate directly on a hosted Surface
+machine, run the bounded browser-auth daemon only behind a private backend:
+
+```bash
+surface auth serve uni --host 127.0.0.1 --port 8766 --auth-token-file /run/secrets/surface-auth-token \
+  --expected-email you@university.edu
+```
+
+The token file must be owner-only. Surface does not print it or expose it in browser URLs. The
+backend can start one candidate sign-in, show the authenticated screenshot/control relay to the
+user, then finalize it. Finalization probes the candidate Outlook mailbox before replacing Surface's
+active persistent browser profile. An explicit expected email requires a visible Outlook account
+control to match before promotion; without it, success proves UI readiness but not a mailbox address.
+Cancel, expiry, and failed login keep the active profile. Do not claim a hosted browser session can
+use a local Safari profile, and do not bypass Microsoft MFA or conditional access. This stays Outlook
+Web + Playwright; it does not add Microsoft Graph or IMAP auth.
+
 For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
 provider web settings before logging in. Generic IMAP login does not need a
 Google Cloud project, OAuth client JSON, Microsoft Graph app registration, or a

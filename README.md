@@ -120,6 +120,34 @@ Outlook auth opens Chrome and stores a dedicated browser profile under
 Exchange app passwords, or admin approval. You do need Chrome and the ability to
 complete your normal Microsoft sign-in flow.
 
+### Hosted Outlook browser sign-in
+
+For a private hosted viewer on the same machine as Surface, run a dedicated one-account daemon:
+
+```bash
+surface auth serve uni --host 127.0.0.1 --port 8766 --auth-token-file /run/secrets/surface-auth-token \
+  --expected-email you@university.edu
+```
+
+The token file must be readable only by its owner. The daemon prints a safe JSON listener envelope
+but never prints the token, cookies, candidate path, typed text, or request bodies. A private Dross
+backend can send `Authorization: Bearer <token>` to begin, inspect, finalize, or cancel one login;
+its viewer can use the separately authenticated screenshot and bounded control endpoints. Do not put
+the token in a browser URL.
+
+Each login starts in a fresh candidate Chrome profile. `finalize` runs an actual Outlook mailbox UI
+probe and promotes the candidate only when that succeeds. When `--expected-email` or an authenticated
+`begin` request supplies an address, Surface also requires a visible Outlook account-control value to
+match it before promotion. Without an expected address, successful finalization proves UI readiness,
+not the signed-in address. Cancellation, timeout, browser failure, and unsuccessful probes retain the
+existing profile used by Surface queries. This is web automation
+for Outlook work or university accounts; it does not use Microsoft Graph, IMAP, a cookie transfer
+from Safari, or a conditional-access workaround.
+
+The default browser is headed. On a Linux server, provide a display such as Xvfb, or pass
+`--headless` to drive the login through the screenshot/control relay. The daemon is intentionally
+loopback by default; use a private authenticated backend or tunnel rather than exposing it publicly.
+
 For Gmail, `surface auth login <account>` uses a Google desktop OAuth client and
 stores the refresh token under `~/.surface-cli/auth/<account_id>/`. Place the
 client secret at `./client_secret.json` or set `SURFACE_GMAIL_CLIENT_SECRET_FILE`.

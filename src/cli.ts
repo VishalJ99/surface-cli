@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { accountIdentityInputSchema, accountInputSchema, providerSchema } from "./contracts/account.js";
 import { SurfaceError, errorToEnvelope } from "./lib/errors.js";
 import {
+  hostedAuthDefaults,
+  readHostedAuthToken,
+  startHostedOutlookAuthServer,
+} from "./hosted-auth.js";
+import {
   authStatusNeedsLogin,
   buildAuthCheckRecord,
   isAuthCheckDue,
@@ -90,6 +95,20 @@ function positiveInt(value: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) {
     throw new SurfaceError("invalid_argument", "Expected a safe positive integer.");
+  }
+  return parsed;
+}
+
+function tcpPort(value: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(value)) {
+    throw new SurfaceError("invalid_argument", "Port must be an integer between 0 and 65535.");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new SurfaceError("invalid_argument", "Port must be an integer between 0 and 65535.");
+  }
+  if (parsed > 65_535) {
+    throw new SurfaceError("invalid_argument", "Port must be between 0 and 65535.");
   }
   return parsed;
 }
@@ -220,6 +239,21 @@ async function runMessageAction(
     }
 
     await action(createAccountRuntimeContext(context, account), resolved);
+  });
+}
+
+async function waitForHostedAuthServerShutdown(server: { close(): Promise<void> }): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let closing = false;
+    const stop = () => {
+      if (closing) {
+        return;
+      }
+      closing = true;
+      void server.close().finally(() => resolve());
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
   });
 }
 
@@ -731,6 +765,53 @@ authCommand
         account: context.account.name,
         status,
       });
+    });
+  });
+
+authCommand
+  .command("serve")
+  .argument("<account>", "Logical Outlook account name")
+  .option("--host <host>", "TCP host to listen on", "127.0.0.1")
+  .requiredOption("--port <port>", "TCP port to listen on", tcpPort)
+  .option("--auth-token-file <path>", "0600 file containing the hosted auth bearer token")
+  .option("--expected-email <email>", "Expected Outlook mailbox email; repeat to allow known aliases", collectStringOption, [])
+  .addOption(
+    new Option("--ttl-seconds <seconds>", "Maximum lifetime of one browser auth session")
+      .argParser(positiveInt)
+      .default(hostedAuthDefaults.ttlSeconds),
+  )
+  .option("--headless", "Run Chrome headlessly; screenshot and interaction endpoints remain available", false)
+  .action(async (accountName: string, options, command: Command) => {
+    await runAccountAction(command.optsWithGlobals<GlobalOptions>(), accountName, async (context) => {
+      if (!(context.account.provider === "outlook" && context.account.transport === "outlook-web-playwright")) {
+        throw new SurfaceError(
+          "unsupported",
+          "Hosted browser auth only supports outlook-web-playwright accounts.",
+          { account: context.account.name },
+        );
+      }
+      const token = readHostedAuthToken({ tokenFile: options.authTokenFile });
+      const server = await startHostedOutlookAuthServer({
+        account: context.account,
+        context,
+        token,
+        ttlSeconds: options.ttlSeconds,
+        headless: Boolean(options.headless),
+        expectedEmails: options.expectedEmail,
+        host: options.host,
+        port: options.port,
+      });
+      writeJson({
+        schema_version: "1",
+        command: "auth-serve",
+        account: context.account.name,
+        provider: context.account.provider,
+        transport: context.account.transport,
+        host: server.host,
+        port: server.port,
+        status: "listening",
+      });
+      await waitForHostedAuthServerShutdown(server);
     });
   });
 

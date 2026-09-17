@@ -24,6 +24,7 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface account identity set <account> [--email <email>] [--name <name>] [--email-alias <email>]... [--name-alias <name>]... [--clear-email-aliases] [--clear-name-aliases]`
 - `surface account remove <account>`
 - `surface auth login <account> [--remember-me] [--remote-host <host>]`
+- `surface auth serve <account> --host <host> --port <port> [--auth-token-file <path>] [--expected-email <email>]... [--ttl-seconds <seconds>] [--headless]`
 - `surface auth status [account]`
 - `surface auth check [account] [--interval <seconds>] [--due-only] [--remembered-only] [--login-if-stale]`
 - `surface auth logout <account>`
@@ -106,6 +107,62 @@ Gmail auth notes:
   - `./client_secret.json` in the current working directory
 - Gmail auth stores refresh-token state under:
   - `~/.surface-cli/auth/<account_id>/gmail-token.json`
+
+Hosted Outlook browser auth notes:
+
+- `surface auth serve <account> --host 127.0.0.1 --port <port>` is a long-lived, one-account
+  Outlook browser-auth daemon. It does not replace `surface auth login`.
+- It requires a bearer token from a 0600 `--auth-token-file` or
+  `SURFACE_AUTH_SERVICE_TOKEN`; Surface never prints or returns that token. An explicit token file
+  takes precedence over the environment variable.
+- Every HTTP request requires `Authorization: Bearer <token>`. The daemon's CLI startup envelope is
+  safe JSON only and contains account, provider, transport, host, port, and `status = "listening"`.
+- `POST /v1/auth/begin` accepts `{}`, `{ "expected_email": "person@example.edu" }`, or an
+  `expected_emails` alias array and returns HTTP 202 with a safe session. The daemon uses only
+  explicitly supplied addresses or `--expected-email` values; it never treats the configured
+  account email as browser-verified:
+
+```json
+{
+  "schema_version": "1",
+  "account": "uni",
+  "provider": "outlook",
+  "transport": "outlook-web-playwright",
+  "session_id": "auth_01K...",
+  "status": "awaiting_browser",
+  "expires_at": "2026-09-17T10:20:00.000Z"
+}
+```
+
+- `GET /v1/auth/status` returns `status = "idle"` when no candidate is active. `GET
+  /v1/auth/<session_id>/status` returns the same safe session shape. Neither endpoint probes
+  Outlook credentials.
+- `POST /v1/auth/<session_id>/finalize` accepts an empty JSON object, runs a real Outlook mailbox
+  UI probe against the candidate profile, and promotes it only when the probe is authenticated and,
+  when an expected email was supplied, a short visible Outlook account-control value matches one of
+  those aliases. Its response may include only `probe.status` and safe `identity.status`
+  (`matched`, `unavailable`, or `mismatched`), never an email address. Without an expected address,
+  an authenticated result proves mailbox UI readiness only; it does not prove which address is
+  signed in.
+- `POST /v1/auth/<session_id>/cancel` accepts an empty JSON object. It cancels the candidate only;
+  it never logs out or removes the active profile.
+- A hosted viewer may call `GET /v1/auth/<session_id>/screenshot` and the serialized interaction
+  endpoints `POST /interaction/click`, `/type`, `/key`, and `/scroll`. Click coordinates must fit
+  the fixed browser viewport; text is limited to 512 characters; keys are allowlisted; each scroll
+  axis is limited to 2000 pixels. Screenshot bytes are intentional authenticated viewer content,
+  not stdout JSON.
+- Sessions have a fixed TTL (20 minutes by default). Expiry, cancellation, daemon shutdown, and an
+  unsuccessful probe retain the active profile. Candidate cleanup only removes a profile after its
+  browser closes; a close failure is reported as `browser_close_failed` and leaves it for safe
+  retry/recovery. One daemon lock owns each account profile, and startup prunes only direct,
+  valid, expired, no-longer-referenced candidate directories.
+- The service reports only safe HTTP errors: 401 `forbidden`, 404 `not_found`, 409
+  `auth_pending`/`session_invalid`, 410 `auth_expired`, 400 `invalid_argument`, or 500
+  `internal_error`. It does not expose cookies, candidate paths, request bodies, typed text, or
+  service-token values.
+- Use `--headless` for screenshot/control auth on hosts without a visible desktop. A headed setup
+  needs an available display such as Xvfb. Surface does not bypass Microsoft MFA, conditional
+  access, or device checks.
 
 IMAP/SMTP auth notes:
 
