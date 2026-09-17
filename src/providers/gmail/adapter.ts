@@ -1624,6 +1624,7 @@ export class GmailApiAdapter implements MailProviderAdapter {
   }
 
   async rsvp(account: MailAccount, messageRef: string, response: RsvpResponse, context: ProviderContext): Promise<RsvpResultEnvelope> {
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
     const target = await resolveGmailRsvpTarget(account, messageRef, context);
     const invite = await performGmailRsvp(account, context, target, response);
     context.db.updateInviteForThread(target.threadRef, {

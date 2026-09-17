@@ -1943,6 +1943,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     response: RsvpResponse,
     context: ProviderContext,
   ): Promise<RsvpResultEnvelope> {
+    assertWriteAllowed(context.config, account, { to: [], cc: [], bcc: [] }, { disposition: "non_send" });
     const { locator, stored } = await resolveRsvpLocator(account, messageRef, context);
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
