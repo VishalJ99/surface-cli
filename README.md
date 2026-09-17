@@ -147,6 +147,9 @@ from Safari, or a conditional-access workaround.
 The default browser is headed. On a Linux server, provide a display such as Xvfb, or pass
 `--headless` to drive the login through the screenshot/control relay. The daemon is intentionally
 loopback by default; use a private authenticated backend or tunnel rather than exposing it publicly.
+Linux browser-capacity recovery also needs the standard `ps` executable (`procps` or `procps-ng` in
+most base images). Surface runs it with `LC_ALL=C` to identify only its own marker-tagged Chromium
+tree; if process inspection is unavailable, it fails closed instead of launching another browser.
 
 ### Browser memory budget
 

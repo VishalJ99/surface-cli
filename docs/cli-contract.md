@@ -170,6 +170,10 @@ auth candidates, stateless read/write commands, and opt-in warm sessions. It def
 active Surface-owned browser. A second command returns the retryable JSON error `browser_busy`; a
 command deadline returns retryable `browser_deadline_exceeded`. Surface does not wait indefinitely or inspect unrelated user Chrome processes.
 
+Linux hosts need the standard `ps` executable (`procps` or `procps-ng` in most base images).
+Surface calls it with `LC_ALL=C` for stable process-start parsing; if it cannot inspect its own
+same-UID marker tree, the capacity operation fails closed with `browser_busy`.
+
 The shared lease root is `BROWSER_AUTOMATION_LEASE_DIR`, defaulting to
 `${XDG_STATE_HOME:-~/.local/state}/browser-automation/leases`. The root must be private and owned
 by the current user. It contains a private SQLite capacity ledger with one shared budget and active

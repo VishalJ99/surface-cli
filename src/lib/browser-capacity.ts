@@ -386,24 +386,54 @@ export class BrowserLeaseManager {
   private openDatabase(): InstanceType<typeof Database> {
     const database = new Database(join(this.leaseDir, "browser-capacity.sqlite"));
     database.pragma(`busy_timeout = ${this.acquireTimeoutMs}`);
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS browser_automation_budget (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        version INTEGER NOT NULL,
-        max_active INTEGER NOT NULL CHECK (max_active BETWEEN 1 AND 32)
+    let migrationOpen = false;
+    try {
+      // A previous pre-release guard wrote the first version of this table without the captured
+      // process tree. Serialize the additive migration so concurrent CLI processes cannot race an
+      // ALTER TABLE, and mark old rows incomplete/fail-closed via their column defaults.
+      database.exec("BEGIN IMMEDIATE");
+      migrationOpen = true;
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS browser_automation_budget (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          version INTEGER NOT NULL,
+          max_active INTEGER NOT NULL CHECK (max_active BETWEEN 1 AND 32)
+        );
+        CREATE TABLE IF NOT EXISTS browser_automation_leases (
+          lease_id TEXT PRIMARY KEY,
+          version INTEGER NOT NULL,
+          owner TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          pid INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          marker TEXT NOT NULL UNIQUE,
+          owned_processes TEXT NOT NULL DEFAULT '[]',
+          capture_complete INTEGER NOT NULL DEFAULT 0 CHECK (capture_complete IN (0, 1))
+        );
+      `);
+      const columns = new Set(
+        (database.prepare("PRAGMA table_info(browser_automation_leases)").all() as Array<{ name: string }>)
+          .map((column) => column.name),
       );
-      CREATE TABLE IF NOT EXISTS browser_automation_leases (
-        lease_id TEXT PRIMARY KEY,
-        version INTEGER NOT NULL,
-        owner TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        pid INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        marker TEXT NOT NULL UNIQUE,
-        owned_processes TEXT NOT NULL DEFAULT '[]',
-        capture_complete INTEGER NOT NULL DEFAULT 0 CHECK (capture_complete IN (0, 1))
-      );
-    `);
+      if (!columns.has("owned_processes")) {
+        database.exec("ALTER TABLE browser_automation_leases ADD COLUMN owned_processes TEXT NOT NULL DEFAULT '[]'");
+      }
+      if (!columns.has("capture_complete")) {
+        database.exec("ALTER TABLE browser_automation_leases ADD COLUMN capture_complete INTEGER NOT NULL DEFAULT 0 CHECK (capture_complete IN (0, 1))");
+      }
+      database.exec("COMMIT");
+      migrationOpen = false;
+    } catch (error) {
+      if (migrationOpen) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          // SQLite may already have rolled back the failed migration.
+        }
+      }
+      database.close();
+      throw error;
+    }
     if (process.platform !== "win32") {
       chmodSync(join(this.leaseDir, "browser-capacity.sqlite"), 0o600);
     }

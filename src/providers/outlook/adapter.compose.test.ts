@@ -136,7 +136,9 @@ async function withComposeFixture(run: (page: Page) => Promise<void>): Promise<v
     await installComposeFixture(session.page);
     await run(session.page);
   } finally {
-    await session.context.close();
+    // Await Surface's verified close path so this fixture cannot start the next case while a
+    // marker-owned Chromium descendant still occupies the shared one-browser budget.
+    await session.close();
     rmSync(profileDir, { recursive: true, force: true });
   }
 }

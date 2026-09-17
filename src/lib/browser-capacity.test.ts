@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import Database from "better-sqlite3";
+
 import {
   BrowserLeaseManager,
   browserAutomationRuntimeConfig,
@@ -39,6 +41,61 @@ test("browser leases bound separate managers sharing one global root", async () 
     await first.release();
     const second = await manager(root).acquire();
     await second.release();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("browser leases add capture columns to a pre-release ledger and retain legacy rows fail-closed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "surface-browser-capacity-legacy-"));
+  try {
+    const database = new Database(join(root, "browser-capacity.sqlite"));
+    database.exec(`
+      CREATE TABLE browser_automation_budget (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        version INTEGER NOT NULL,
+        max_active INTEGER NOT NULL CHECK (max_active BETWEEN 1 AND 32)
+      );
+      CREATE TABLE browser_automation_leases (
+        lease_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        owner TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        marker TEXT NOT NULL UNIQUE
+      );
+      INSERT INTO browser_automation_budget (singleton, version, max_active) VALUES (1, 1, 1);
+      INSERT INTO browser_automation_leases (lease_id, version, owner, kind, pid, created_at, marker)
+      VALUES ('legacy', 1, 'surface', 'command', 99, '2026-01-01T00:00:00.000Z', '--browser-automation-lease=legacy');
+    `);
+    database.close();
+
+    await assert.rejects(
+      manager(root).acquire(),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "browser_busy",
+    );
+
+    const migrated = new Database(join(root, "browser-capacity.sqlite"), { readonly: true });
+    const columns = migrated
+      .prepare("PRAGMA table_info(browser_automation_leases)")
+      .all() as Array<{ name: string }>;
+    const legacy = migrated
+      .prepare("SELECT owned_processes, capture_complete FROM browser_automation_leases WHERE lease_id = 'legacy'")
+      .get() as { owned_processes: string; capture_complete: number };
+    migrated.close();
+    assert.deepEqual(columns.map((column) => column.name), [
+      "lease_id",
+      "version",
+      "owner",
+      "kind",
+      "pid",
+      "created_at",
+      "marker",
+      "owned_processes",
+      "capture_complete",
+    ]);
+    assert.deepEqual(legacy, { owned_processes: "[]", capture_complete: 0 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
