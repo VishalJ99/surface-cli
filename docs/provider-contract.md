@@ -130,8 +130,7 @@ scheduled-auth hook in v1. A status other than `authenticated` is treated as sta
 automation a clear `login_command`; provider login remains the normal explicit auth flow and may
 require user consent or provider-specific secret input.
 
-`SendMessageInput.attachments` carries files resolved by the CLI for direct `surface mail send`
-only. Each entry includes the local path for transports that need a browser upload, normalized
+`SendMessageInput.attachments` and optional `ReplyInput.attachments` carry files resolved by the CLI for send, reply and reply-all. Each entry includes the local path for transports that need a browser upload, normalized
 filename/MIME/size metadata, and base64 bytes for API or SMTP MIME composition. Providers must keep
 paths and bytes out of public result JSON; `SendResultEnvelope.attachments` exposes metadata only.
 
@@ -187,8 +186,7 @@ Capabilities are account/transport-level. Message applicability should be derive
 ## Write Action Rules
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists
-- direct `send` supports repeatable local file attachments through `--attach`; reply/reply-all/forward
-  attachment upload remains deferred until those semantics are explicitly designed
+- `send`, `reply` and `reply-all` support repeatable local file attachments through `--attach`; forward attachment upload remains deferred
 - `archive` is part of the supported v1 action set
 - read-state mutations such as `mark-read`, `mark-unread`, and `read --mark-read` are mailbox mutations
   and must stay behind explicit local write enablement and any configured account allowlist

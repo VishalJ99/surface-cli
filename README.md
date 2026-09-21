@@ -369,7 +369,7 @@ Surface v1 supports:
 - bounded unread-state refresh with `sync-unread-state`
 - thread refresh and message read
 - attachment list/download
-- send with repeatable `--attach`, plus reply/reply-all/forward, with `--draft` as the safe path
+- send, reply and reply-all with repeatable `--attach`; forward is also supported, with `--draft` as the safe path
 - archive where provider folders allow it, mark-read, and mark-unread
 - RSVP for Gmail/Outlook calendar invites
 - Outlook warm sessions for repeated read-path commands

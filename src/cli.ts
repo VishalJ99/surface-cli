@@ -1116,6 +1116,7 @@ mailCommand
   .requiredOption("--body <body>", "Reply body text")
   .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .option("--attach <path>", "Local file path to attach; repeat for multiple files", collectStringOption, [])
   .option("--draft", "Save to drafts instead of sending", false)
   .action(async (messageRef: string, options, command: Command) => {
     await runMessageAction(
@@ -1131,6 +1132,7 @@ mailCommand
               cc: options.cc ?? [],
               bcc: options.bcc ?? [],
               body: options.body,
+              attachments: resolveLocalComposeAttachments(options.attach),
               draft: Boolean(options.draft),
             },
             context,
@@ -1146,6 +1148,7 @@ mailCommand
   .requiredOption("--body <body>", "Reply body text")
   .option("--cc <email>", "Cc recipient email address", collectStringOption, [])
   .option("--bcc <email>", "Bcc recipient email address", collectStringOption, [])
+  .option("--attach <path>", "Local file path to attach; repeat for multiple files", collectStringOption, [])
   .option("--draft", "Save to drafts instead of sending", false)
   .action(async (messageRef: string, options, command: Command) => {
     await runMessageAction(
@@ -1161,6 +1164,7 @@ mailCommand
               cc: options.cc ?? [],
               bcc: options.bcc ?? [],
               body: options.body,
+              attachments: resolveLocalComposeAttachments(options.attach),
               draft: Boolean(options.draft),
             },
             context,

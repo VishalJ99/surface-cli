@@ -2054,6 +2054,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     const normalizedInput = {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
+      attachments: input.attachments ?? [],
       body: input.body,
       draft: input.draft,
     };
@@ -2079,6 +2080,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Cc", normalizedInput.cc);
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
+      await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
@@ -2096,6 +2098,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       recipientsFromStored(latest.stored ?? undefined, { to: [], cc: normalizedInput.cc, bcc: normalizedInput.bcc }),
       { thread_ref: target.stored.thread_ref, message_ref: latest.message_ref },
       messageRef,
+      composeAttachmentMetas(input.attachments),
     );
   }
 
@@ -2109,6 +2112,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     const normalizedInput = {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
+      attachments: input.attachments ?? [],
       body: input.body,
       draft: input.draft,
     };
@@ -2134,6 +2138,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Cc", normalizedInput.cc);
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
+      await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await session.context.close();
@@ -2151,6 +2156,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       recipientsFromStored(latest.stored ?? undefined, { to: [], cc: normalizedInput.cc, bcc: normalizedInput.bcc }),
       { thread_ref: target.stored.thread_ref, message_ref: latest.message_ref },
       messageRef,
+      composeAttachmentMetas(input.attachments),
     );
   }
 

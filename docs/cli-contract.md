@@ -347,8 +347,8 @@ Example session start result:
 - `surface mail thread get <thread_ref> [--refresh] [--session <session_id>]`
 - `surface mail read <message_ref> [--refresh] [--session <session_id>] [--mark-read]`
 - `surface mail send --account <account> --to <email> [--cc <email>] [--bcc <email>] --subject <subject> --body <body> [--attach <path>]... [--draft]`
-- `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
-- `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--draft]`
+- `surface mail reply <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--attach <path>]... [--draft]`
+- `surface mail reply-all <message_ref> --body <body> [--cc <email>] [--bcc <email>] [--attach <path>]... [--draft]`
 - `surface mail forward <message_ref> --to <email> [--cc <email>] [--bcc <email>] --body <body> [--draft]`
 - `surface mail archive <message_ref>`
 - `surface mail mark-read <message_ref>...`
@@ -1261,3 +1261,13 @@ payload is stale.
 - draft lifecycle commands such as list/update/send-existing/discard
 
 See also `docs/m1-checklist.md` for the specific decisions required to clear Milestone 1.
+
+### Reply attachments (PER-518)
+
+`reply` and `reply-all` accept repeatable `--attach <path>` with the same validation as `send`. They preserve reply threading and do not automatically reattach original files. The result includes attachment metadata only, for example:
+
+```json
+{"command":"reply-all","status":"sent","in_reply_to_message_ref":"msg_example","attachments":[{"filename":"list.txt","mime_type":"text/plain","size_bytes":12}]}
+```
+
+This is an excerpt of the existing send-result envelope, not a new envelope.

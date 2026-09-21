@@ -255,6 +255,7 @@ surface mail send --account personal_2 --to recipient@example.com --subject "Hel
 surface mail reply msg_01... --body "Thanks"
 surface mail reply msg_01... --body "Thanks" --draft
 surface mail reply-all msg_01... --body "Thanks everyone"
+surface mail reply-all msg_01... --body "Please see attached" --attach ./list.txt
 surface mail forward msg_01... --to recipient@example.com --body "FYI"
 ```
 
@@ -311,7 +312,7 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 - watcher notifications should go to the user-requested destination; do not invent a session,
   channel, or DM target
 - `--draft` is the safe compose path when you do not need to send immediately.
-- direct `mail send` accepts repeatable `--attach <path>` flags; result JSON exposes attachment
+- `mail send`, `mail reply` and `mail reply-all` accept repeatable `--attach <path>` flags; result JSON exposes attachment
   metadata only, not local paths or file bytes
 
 ## Provider Notes
