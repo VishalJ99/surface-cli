@@ -154,6 +154,9 @@ Providers should also keep account-owner identity current when they can verify i
 Gmail can update the primary identity from the authenticated Gmail profile. Outlook v1 currently
 only verifies that a browser profile reaches the mailbox UI, so user-confirmed identity may be
 required until a reliable Outlook mailbox identity extraction path exists.
+If Outlook redirects the browser profile to a Microsoft sign-in page, read operations must return
+`reauth_required` promptly instead of reporting a mailbox-list timeout. Interactive sign-in remains
+an auth-login step on a headful device.
 
 Public JSON must not leak transport-specific field names unless explicitly documented.
 

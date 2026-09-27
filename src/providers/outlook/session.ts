@@ -5,6 +5,7 @@ import { stdin, stdout } from "node:process";
 import { chromium, errors, type BrowserContext, type Page } from "playwright-core";
 
 import type { AuthStatus } from "../types.js";
+import { assertOutlookNotOnSignInPage, isMicrosoftSignInUrl } from "./auth-state.js";
 import {
   createOutlookTempProfileClone,
   pruneOutlookTempProfiles,
@@ -136,6 +137,8 @@ async function waitForMailboxReady(page: Page, timeoutMs: number): Promise<void>
       continue;
     }
 
+    assertOutlookNotOnSignInPage(page.url());
+
     try {
       await waitForMessageList(page, Math.min(2_000, Math.max(500, deadline - Date.now())));
       return;
@@ -145,13 +148,13 @@ async function waitForMailboxReady(page: Page, timeoutMs: number): Promise<void>
     }
   }
 
+  assertOutlookNotOnSignInPage(page.url());
   throw lastError instanceof Error ? lastError : new Error("Timed out waiting for Outlook mailbox UI.");
 }
 
 function classifyAuthBody(text: string, pageUrl: string): AuthStatus {
   const lowered = text.toLowerCase();
-  const loginUrls = ["login.microsoftonline.com", "login.live.com", "/common/oauth2/"];
-  if (loginUrls.some((fragment) => pageUrl.includes(fragment))) {
+  if (isMicrosoftSignInUrl(pageUrl) || pageUrl.includes("/common/oauth2/")) {
     return { status: "unauthenticated", detail: "Outlook is on a Microsoft login page." };
   }
 
