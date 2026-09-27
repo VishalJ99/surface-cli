@@ -1731,6 +1731,7 @@ export class GmailApiAdapter implements MailProviderAdapter {
         bcc: recipients.bcc,
         subject,
         body: buildReplyBody(input.body, target.stored),
+        attachments: input.attachments,
         inReplyTo: originalMessageId,
         references,
       }),
@@ -1750,6 +1751,7 @@ export class GmailApiAdapter implements MailProviderAdapter {
       recipientsFromInput(recipients),
       result.refs,
       messageRef,
+      composeAttachmentMetas(input.attachments),
     );
   }
 
@@ -1810,6 +1812,7 @@ export class GmailApiAdapter implements MailProviderAdapter {
         bcc: recipients.bcc,
         subject,
         body: buildReplyBody(input.body, target.stored),
+        attachments: input.attachments,
         inReplyTo: originalMessageId,
         references,
       }),
@@ -1829,6 +1832,7 @@ export class GmailApiAdapter implements MailProviderAdapter {
       recipientsFromInput(recipients),
       result.refs,
       messageRef,
+      composeAttachmentMetas(input.attachments),
     );
   }
 

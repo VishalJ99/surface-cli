@@ -1,12 +1,15 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
 import { chromium, errors, type BrowserContext, type Page } from "playwright-core";
 
 import type { AuthStatus } from "../types.js";
+import { assertOutlookNotOnSignInPage, isMicrosoftSignInUrl } from "./auth-state.js";
+import {
+  createOutlookTempProfileClone,
+  pruneOutlookTempProfiles,
+} from "./temp-profiles.js";
 
 const DEFAULT_OUTLOOK_URL = "https://outlook.office.com/mail/";
 
@@ -52,8 +55,12 @@ export async function launchOutlookSession(
   let cleanup: (() => void) | undefined;
 
   if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
-    effectiveProfileDir = join(tmpdir(), `surface-outlook-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    cpSync(profileDir, effectiveProfileDir, { recursive: true });
+    try {
+      pruneOutlookTempProfiles();
+    } catch {
+      // Stale temp cleanup is opportunistic and must not block Outlook account use.
+    }
+    effectiveProfileDir = createOutlookTempProfileClone(profileDir);
     cleanup = () => rmSync(effectiveProfileDir, { recursive: true, force: true });
   }
 
@@ -130,6 +137,8 @@ async function waitForMailboxReady(page: Page, timeoutMs: number): Promise<void>
       continue;
     }
 
+    assertOutlookNotOnSignInPage(page.url());
+
     try {
       await waitForMessageList(page, Math.min(2_000, Math.max(500, deadline - Date.now())));
       return;
@@ -139,13 +148,13 @@ async function waitForMailboxReady(page: Page, timeoutMs: number): Promise<void>
     }
   }
 
+  assertOutlookNotOnSignInPage(page.url());
   throw lastError instanceof Error ? lastError : new Error("Timed out waiting for Outlook mailbox UI.");
 }
 
 function classifyAuthBody(text: string, pageUrl: string): AuthStatus {
   const lowered = text.toLowerCase();
-  const loginUrls = ["login.microsoftonline.com", "login.live.com", "/common/oauth2/"];
-  if (loginUrls.some((fragment) => pageUrl.includes(fragment))) {
+  if (isMicrosoftSignInUrl(pageUrl) || pageUrl.includes("/common/oauth2/")) {
     return { status: "unauthenticated", detail: "Outlook is on a Microsoft login page." };
   }
 

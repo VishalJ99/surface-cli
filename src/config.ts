@@ -13,6 +13,7 @@ const fileConfigSchema = z.object({
   cache_dir: z.string().optional(),
   default_result_limit: z.number().int().positive().optional(),
   provider_timeout_ms: z.number().int().positive().optional(),
+  auth_check_interval_seconds: z.number().int().positive().optional(),
   summarizer: z
     .object({
       backend: summarizerBackendSchema.optional(),
@@ -34,6 +35,7 @@ export interface SurfaceConfig {
   cacheDir: string;
   defaultResultLimit: number;
   providerTimeoutMs: number;
+  authCheckIntervalSeconds: number;
   summarizerBackend: "openrouter" | "openclaw" | "none";
   summarizerModel: string;
   summaryInputMaxBytes: number;
@@ -62,6 +64,7 @@ function defaultConfigTemplate(): string {
     "cache_dir = \"~/.surface-cli\"",
     "default_result_limit = 50",
     "provider_timeout_ms = 30000",
+    "auth_check_interval_seconds = 86400",
     "summary_input_max_bytes = 16384",
     "summarizer_backend = \"none\"",
     "summarizer_model = \"openai/gpt-5.4-mini\"",
@@ -162,6 +165,8 @@ export function loadConfig(options: ConfigLoadOptions = {}): {
       envInt("SURFACE_DEFAULT_RESULT_LIMIT") ?? fileConfig.default_result_limit ?? 50,
     providerTimeoutMs:
       envInt("SURFACE_PROVIDER_TIMEOUT_MS") ?? fileConfig.provider_timeout_ms ?? 30_000,
+    authCheckIntervalSeconds:
+      envInt("SURFACE_AUTH_CHECK_INTERVAL_SECONDS") ?? fileConfig.auth_check_interval_seconds ?? 86_400,
     summarizerBackend:
       (process.env.SURFACE_SUMMARIZER_BACKEND as SurfaceConfig["summarizerBackend"] | undefined) ??
       fileConfig.summarizer?.backend ??

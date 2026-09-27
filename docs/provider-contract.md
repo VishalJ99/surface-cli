@@ -125,8 +125,12 @@ username, and password source flags. `imap-smtp` may infer server settings from 
 domain preset when no server flags are supplied. Providers must store durable auth material under
 the account auth directory, not in the repo or local policy config.
 
-`SendMessageInput.attachments` carries files resolved by the CLI for direct `surface mail send`
-only. Each entry includes the local path for transports that need a browser upload, normalized
+`surface auth check` is a CLI/runtime layer over `authStatus`. Providers do not need a separate
+scheduled-auth hook in v1. A status other than `authenticated` is treated as stale and should give
+automation a clear `login_command`; provider login remains the normal explicit auth flow and may
+require user consent or provider-specific secret input.
+
+`SendMessageInput.attachments` and optional `ReplyInput.attachments` carry files resolved by the CLI for send, reply and reply-all. Each entry includes the local path for transports that need a browser upload, normalized
 filename/MIME/size metadata, and base64 bytes for API or SMTP MIME composition. Providers must keep
 paths and bytes out of public result JSON; `SendResultEnvelope.attachments` exposes metadata only.
 
@@ -150,6 +154,9 @@ Providers should also keep account-owner identity current when they can verify i
 Gmail can update the primary identity from the authenticated Gmail profile. Outlook v1 currently
 only verifies that a browser profile reaches the mailbox UI, so user-confirmed identity may be
 required until a reliable Outlook mailbox identity extraction path exists.
+If Outlook redirects the browser profile to a Microsoft sign-in page, read operations must return
+`reauth_required` promptly instead of reporting a mailbox-list timeout. Interactive sign-in remains
+an auth-login step on a headful device.
 
 Public JSON must not leak transport-specific field names unless explicitly documented.
 
@@ -182,8 +189,7 @@ Capabilities are account/transport-level. Message applicability should be derive
 ## Write Action Rules
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists
-- direct `send` supports repeatable local file attachments through `--attach`; reply/reply-all/forward
-  attachment upload remains deferred until those semantics are explicitly designed
+- `send`, `reply` and `reply-all` support repeatable local file attachments through `--attach`; forward attachment upload remains deferred
 - `archive` is part of the supported v1 action set
 - read-state mutations such as `mark-read`, `mark-unread`, and `read --mark-read` are mailbox mutations
   and must stay behind explicit local write enablement and any configured account allowlist

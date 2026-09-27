@@ -13,6 +13,12 @@ Current expected precedence:
 3. config file
 4. built-in defaults
 
+At process startup Surface also loads a project-local `.env` file from the current working
+directory when present. Values already exported in the process environment win over `.env` values.
+The loader is limited to `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, and
+`SURFACE_AUTH_CHECK_INTERVAL_SECONDS` so a checkout-local `.env` cannot silently enable writes,
+change summarizer backends, or provide third-party API keys.
+
 ## Expected Config File
 
 Suggested default path:
@@ -43,6 +49,9 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
 - `provider_timeout_ms`
   Timeout budget for provider fetch operations.
   Default: `30000`
+- `auth_check_interval_seconds`
+  Default cadence for `surface auth check` next-check scheduling.
+  Default: `86400`
 
 ### Summarization
 
@@ -84,6 +93,8 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
 - `SURFACE_CACHE_DIR`
 - `SURFACE_DEFAULT_RESULT_LIMIT`
 - `SURFACE_PROVIDER_TIMEOUT_MS`
+- `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
+- `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
 - `SURFACE_SUMMARIZER_BACKEND`
 - `SURFACE_SUMMARIZER_MODEL`
 - `SURFACE_SUMMARY_INPUT_MAX_BYTES`
@@ -99,6 +110,32 @@ Account-owner identity for ME-scoped summaries also lives in SQLite account stat
 
 Secrets such as API keys should not be stored in the config file. They should live in
 environment variables or provider/account-specific auth storage.
+
+Remembered auth runtime requirements:
+
+- `surface auth login <account> --remember-me`
+  Records the account in `remembered-auth.json` under the Surface state root after a successful
+  local login. It also updates the project `.env` marker for existing repo-local automation.
+- `surface auth login <account> --remote-host <host> --remember-me`
+  Records remembered-auth metadata in the remote Surface state root after successful remote login.
+  No remote project directory is required.
+- `remembered-auth.json`
+  JSON state under the Surface root with a version, account-name array, and check cadence. This is
+  the primary remembered-auth source for `surface auth check --remembered-only`.
+- `SURFACE_REMEMBERED_AUTH_ACCOUNTS`
+  Compatibility/project `.env` JSON array of account names also used by
+  `surface auth check --remembered-only`.
+  Legacy comma-separated values are accepted for compatibility, but `--remember-me` writes JSON so
+  account names containing spaces or commas round-trip correctly.
+  Malformed JSON array values fail closed with `invalid_configuration`.
+- `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
+  Check cadence used when `surface auth check` is called without `--interval`.
+- The project `.env` file is ignored by git and may contain local-only settings. It should not be
+  used as the source of truth for raw OAuth tokens, Outlook browser cookies, or mailbox passwords.
+  Those remain in provider/account-specific auth storage.
+- If a local automation workflow intentionally wants all Surface state under the checkout, set
+  `SURFACE_CACHE_DIR` in `.env` to an ignored project-local directory such as
+  `/path/to/surface-cli/.surface-cli`.
 
 Summarizer backend runtime requirements:
 
@@ -130,7 +167,7 @@ Gmail auth runtime requirements:
 For headless remote setup, the expected pattern is:
 
 ```bash
-surface auth login <gmail-account> --remote-host <host>
+surface auth login <gmail-account> --remote-host <host> --remember-me
 ```
 
 Surface starts the SSH port-forward for you before the OAuth approval URL is printed.
@@ -141,7 +178,7 @@ when the remote host does not already have Gmail OAuth client credentials stored
 For Outlook headless remote setup, use the same public command:
 
 ```bash
-surface auth login <outlook-account> --remote-host <host>
+surface auth login <outlook-account> --remote-host <host> --remember-me
 ```
 
 That path launches local Chrome in a dedicated Surface profile, waits for the user to finish

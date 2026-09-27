@@ -1,4 +1,5 @@
 import { errors, type APIRequestContext, type BrowserContext, type Page } from "playwright-core";
+import { assertOutlookNotOnSignInPage } from "./auth-state.js";
 
 const DEFAULT_OUTLOOK_URL = "https://outlook.office.com/mail/";
 const OWA_REQUIRED_HEADER_KEYS = [
@@ -107,6 +108,8 @@ export async function waitForOutlookMailboxReady(page: Page, timeoutMs: number):
       continue;
     }
 
+    assertOutlookNotOnSignInPage(page.url());
+
     try {
       await waitForMessageList(page, Math.min(2_000, Math.max(500, deadline - Date.now())));
       return;
@@ -116,6 +119,7 @@ export async function waitForOutlookMailboxReady(page: Page, timeoutMs: number):
     }
   }
 
+  assertOutlookNotOnSignInPage(page.url());
   if (lastError instanceof Error) {
     throw lastError;
   }

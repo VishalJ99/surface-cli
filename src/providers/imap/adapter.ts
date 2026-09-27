@@ -1963,6 +1963,7 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
       recipients,
       subject,
       body: buildReplyBody(input.body, target.stored),
+        attachments: input.attachments,
       draft: input.draft,
       inReplyTo: target.messageId,
       references: replyReferences(target),
@@ -1976,6 +1977,7 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
       recipientsFromInput(recipients),
       result.refs,
       messageRef,
+      composeAttachmentMetas(input.attachments),
     );
   }
 
@@ -2020,6 +2022,7 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
       recipients,
       subject,
       body: buildReplyBody(input.body, target.stored),
+        attachments: input.attachments,
       draft: input.draft,
       inReplyTo: target.messageId,
       references: replyReferences(target),
@@ -2033,6 +2036,7 @@ export class ImapSmtpAdapter implements MailProviderAdapter {
       recipientsFromInput(recipients),
       result.refs,
       messageRef,
+      composeAttachmentMetas(input.attachments),
     );
   }
 

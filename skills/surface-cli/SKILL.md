@@ -46,6 +46,7 @@ Check setup:
 ```bash
 surface account list
 surface auth status
+surface auth check --remembered-only --due-only
 ```
 
 If the user asks to install the Surface skill for another agent on the same machine, use:
@@ -83,6 +84,19 @@ surface auth login gmx \
   --username you@gmx.com \
   --password "$SURFACE_GMX_PASSWORD"
 ```
+
+Use `surface auth login <account> --remember-me` when local automation should keep checking that
+account for stale auth. This records remembered-auth account names and check cadence in
+`remembered-auth.json` under the Surface state root; local login also updates the project `.env`
+marker for compatibility. Raw provider tokens, Outlook profile cookies, and IMAP passwords remain
+in Surface auth storage. Surface only auto-loads compatibility remembered-auth metadata and
+`SURFACE_CACHE_DIR` from project `.env`; write-safety and summarizer settings still come from the
+process environment or `config.toml`. Use `surface auth check --remembered-only --due-only` from
+scheduled or watcher workflows.
+
+For remote auth, use `surface auth login <account> --remote-host <host> --remember-me` so the
+remembered-auth marker is written to the remote Surface state root after auth succeeds. No remote
+project directory is required.
 
 For GMX and similar providers, make sure IMAP/POP3 access is enabled in the
 provider web settings before logging in. Generic IMAP login does not need a
@@ -241,6 +255,7 @@ surface mail send --account personal_2 --to recipient@example.com --subject "Hel
 surface mail reply msg_01... --body "Thanks"
 surface mail reply msg_01... --body "Thanks" --draft
 surface mail reply-all msg_01... --body "Thanks everyone"
+surface mail reply-all msg_01... --body "Please see attached" --attach ./list.txt
 surface mail forward msg_01... --to recipient@example.com --body "FYI"
 ```
 
@@ -256,7 +271,8 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 ## Workflow
 
 1. Start with `surface account list` if the target account is unclear.
-2. Use `surface auth status` before assuming a provider is ready.
+2. Use `surface auth status` before assuming a provider is ready, or
+   `surface auth check --remembered-only --due-only` for scheduled stale-auth monitoring.
 3. Use `surface account identity show <account>` if `summary.needs_action` looks wrong; add
    `--name-alias` or `--email-alias` with `surface account identity set` when the mailbox address
    alone is not enough to identify the user in message bodies.
@@ -296,7 +312,7 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 - watcher notifications should go to the user-requested destination; do not invent a session,
   channel, or DM target
 - `--draft` is the safe compose path when you do not need to send immediately.
-- direct `mail send` accepts repeatable `--attach <path>` flags; result JSON exposes attachment
+- `mail send`, `mail reply` and `mail reply-all` accept repeatable `--attach <path>` flags; result JSON exposes attachment
   metadata only, not local paths or file bytes
 
 ## Provider Notes
@@ -327,6 +343,7 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 ```bash
 surface account list
 surface auth status
+surface auth check --remembered-only --due-only
 surface auth status gmx
 surface session start --account uni
 surface mail fetch-unread --account uni --limit 10

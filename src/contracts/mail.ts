@@ -238,6 +238,7 @@ export interface SendMessageInput {
 }
 
 export interface ReplyInput {
+  attachments?: ComposeAttachmentInput[];
   cc: string[];
   bcc: string[];
   body: string;
