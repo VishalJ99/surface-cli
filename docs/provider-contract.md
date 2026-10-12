@@ -186,6 +186,11 @@ Capabilities are account/transport-level. Message applicability should be derive
 - v1 warm session support is intentionally transport-specific rather than universal
 - read-path warm sessions must remain bound to one account/provider/transport and fail closed on mismatch or expiry
 
+Outlook sessions close browser contexts and disposable profile clones together, including partial
+setup and close failures. Capture listeners and fetched response bodies are always released.
+Headless startup opportunistically reaps only verified old Surface-owned orphan Chromium groups;
+uncertain identity is preserved. See ADR 0048.
+
 ## Write Action Rules
 
 - write actions must stay behind explicit local enablement and recipient/account allowlists

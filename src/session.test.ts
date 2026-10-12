@@ -171,7 +171,14 @@ test("owned startup failure terminates its detached process and records failure"
   child.unref(); record(context, "sess_failed"); context.db.updateSessionProcessInfo("sess_failed", child.pid!);
   try {
     context.db.connection.prepare("UPDATE sessions SET created_at = ? WHERE session_id = ?").run(new Date(Date.now() - 130_000).toISOString(), "sess_failed");
-    await assert.rejects(sessionTestHooks.finishOwnedStartup(context, context.db.getSession("sess_failed")!), { code: "transport_error" });
+    await assert.rejects(sessionTestHooks.finishOwnedStartup(context, context.db.getSession("sess_failed")!, {
+      isPidAlive: () => child.exitCode === null && child.signalCode === null,
+      inspectProcess: () => child.exitCode !== null || child.signalCode !== null ? undefined : {
+        pid: child.pid!, parentPid: process.pid, processGroupId: child.pid!, startedAt: "Mon Oct 12 12:00:00 2026", elapsedSeconds: 1,
+        executablePath: process.execPath, commandLine: `${process.execPath} ${join(process.cwd(), "src/session-daemon.ts")} --session-id sess_failed --account-id ${context.account.account_id} --socket-path ${join(context.paths.sessionsDir, "sess_failed.sock")}`,
+      },
+      kill: (_pid, signal) => { child.kill(signal); }, nowMs: Date.now, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    }), { code: "transport_error" });
     await exited;
     assert.equal(context.db.getSession("sess_failed")?.status, "failed");
     assert.equal(context.db.getSession("sess_failed")?.pid, null);

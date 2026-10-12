@@ -348,7 +348,7 @@ surface mail mark-unread msg_01...
 surface mail rsvp msg_01... --response tentative # Gmail/Outlook calendar invites only
 
 surface cache stats
-surface cache prune --dry-run
+surface cache prune --dry-run # report stale profiles and verified orphan browser groups
 surface cache prune
 ```
 

@@ -128,7 +128,10 @@ persistent state root. In v1, that means stale Outlook headless browser clones n
 `surface-outlook-*` directly under the OS temp root. These clones are copied working profiles, not
 the persistent Outlook auth profile under `auth/<account_id>/profile`. The default prune age is six
 hours, and prune skips profiles that are young, marked with a live owner PID, or referenced by active
-browser process arguments.
+browser process arguments. Before pruning (and before headless clone launch), verified orphan
+Playwright Chromium groups may be terminated after ten minutes when their Surface marker owner
+is dead. Separate executable identity, exact profile/group ownership and fresh start identity are
+required before every signal. Dry runs never signal. See ADR 0048.
 
 ## Open Questions
 

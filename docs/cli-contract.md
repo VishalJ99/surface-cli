@@ -313,7 +313,8 @@ Warm session notes:
 - Outlook provider-backed reads obtain/reuse an account-bound warm session automatically when `--session` is absent
 - when a session is used, explicit `--session` is authoritative and fails closed on invalid, mismatched or expired sessions
 - cached `thread get` continues to ignore `--session` until a live refresh is needed
-- `session start` always creates an independent session; `list` and `stop` also expose automatic sessions
+- `session start` always creates an independent session; `list` reconciles stale rows and `stop` also exposes automatic sessions
+- stop/expiry/failed startup share bounded cleanup; PID signals require exact daemon ownership verification (ADR 0048)
 - default expiry is one hour idle / seven days maximum age; expired or unhealthy automatic sessions are replaced
 - automatic reuse requires matching effective runtime settings (including summarizer configuration and inherited credentials); incompatible/legacy sessions remain available explicitly
 - private health checks are bounded to five seconds, bypass the browser queue, and the new daemon protocol does not renew idle expiry
@@ -379,7 +380,10 @@ Example session start result:
 
 `surface cache prune` removes only disposable Surface-owned temp artifacts. In v1 this means stale
 Outlook headless browser profile clones named `surface-outlook-*` directly under the OS temp root.
-It must not delete auth data, downloaded attachments, SQLite state, or persistent Outlook profiles
+Before pruning, it may terminate only independently verified orphan Playwright Chromium groups
+tied to old Surface profile markers with dead owners (ten-minute grace). Revalidation occurs before
+each signal. Dry runs report candidates and never signal. `status` is `partial` if either cleanup
+reports errors. It must not delete auth data, downloaded attachments, SQLite state, or persistent Outlook profiles
 under `auth/<account_id>/profile`. When `dry_run` is true, `removed` and `removed_bytes` describe
 what would be removed without deleting anything.
 
@@ -391,6 +395,15 @@ Example dry-run output:
   "command": "cache-prune",
   "status": "ok",
   "cache_root": "/Users/alice/.surface-cli",
+  "outlook_orphan_chromium": {
+    "dry_run": true,
+    "planned": 1,
+    "terminated": 0,
+    "force_killed": 0,
+    "exited": 0,
+    "skipped_changed": 0,
+    "errors": []
+  },
   "outlook_temp_profiles": {
     "scanned": 2,
     "removed": 1,

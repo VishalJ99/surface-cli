@@ -10,6 +10,7 @@ import {
   createOutlookTempProfileClone,
   pruneOutlookTempProfiles,
 } from "./temp-profiles.js";
+import { reapOutlookOrphanChromium } from "./orphan-chromium.js";
 
 const DEFAULT_OUTLOOK_URL = "https://outlook.office.com/mail/";
 
@@ -46,9 +47,72 @@ export interface OutlookSession {
   cleanup?: () => void;
 }
 
+export interface OutlookSessionLaunchDependencies {
+  launchPersistentContext?: (
+    userDataDir: string,
+    options: Parameters<typeof chromium.launchPersistentContext>[1],
+  ) => Promise<BrowserContext>;
+  resolveChromeExecutablePath?: () => string;
+  pruneTempProfiles?: typeof pruneOutlookTempProfiles;
+  createTempProfileClone?: typeof createOutlookTempProfileClone;
+  reapOrphanChromium?: typeof reapOutlookOrphanChromium;
+  removeTempProfile?: (profileDir: string) => void;
+}
+
+const closingOutlookSessions = new WeakMap<OutlookSession, Promise<void>>();
+
+async function closeOutlookResources(
+  context: BrowserContext,
+  cleanup: (() => void) | undefined,
+): Promise<void> {
+  let contextCloseFailed = false;
+  let contextCloseError: unknown;
+  let cleanupFailed = false;
+  let cleanupError: unknown;
+
+  try {
+    await context.close();
+  } catch (error) {
+    contextCloseFailed = true;
+    contextCloseError = error;
+  }
+
+  try {
+    cleanup?.();
+  } catch (error) {
+    cleanupFailed = true;
+    cleanupError = error;
+  }
+
+  if (contextCloseFailed && cleanupFailed) {
+    throw new AggregateError(
+      [contextCloseError, cleanupError],
+      "Failed to close the Outlook browser context and remove its temporary profile.",
+    );
+  }
+  if (contextCloseFailed) {
+    throw contextCloseError;
+  }
+  if (cleanupFailed) {
+    throw cleanupError;
+  }
+}
+
+export function closeOutlookSession(session: OutlookSession): Promise<void> {
+  const existing = closingOutlookSessions.get(session);
+  if (existing) {
+    return existing;
+  }
+
+  const closing = closeOutlookResources(session.context, session.cleanup);
+  closingOutlookSessions.set(session, closing);
+  return closing;
+}
+
 export async function launchOutlookSession(
   profileDir: string,
   options: { headless: boolean },
+  dependencies: OutlookSessionLaunchDependencies = {},
 ): Promise<OutlookSession> {
   mkdirSync(profileDir, { recursive: true });
   let effectiveProfileDir = profileDir;
@@ -56,27 +120,59 @@ export async function launchOutlookSession(
 
   if (options.headless && existsSync(profileDir) && readdirSync(profileDir).length > 0) {
     try {
-      pruneOutlookTempProfiles();
+      await (dependencies.reapOrphanChromium ?? reapOutlookOrphanChromium)();
+    } catch {
+      // Orphan reaping is best-effort and must not block Outlook account use.
+    }
+    try {
+      (dependencies.pruneTempProfiles ?? pruneOutlookTempProfiles)();
     } catch {
       // Stale temp cleanup is opportunistic and must not block Outlook account use.
     }
-    effectiveProfileDir = createOutlookTempProfileClone(profileDir);
-    cleanup = () => rmSync(effectiveProfileDir, { recursive: true, force: true });
+    effectiveProfileDir = (dependencies.createTempProfileClone ?? createOutlookTempProfileClone)(profileDir);
+    const removeTempProfile = dependencies.removeTempProfile;
+    cleanup = () => {
+      if (removeTempProfile) {
+        removeTempProfile(effectiveProfileDir);
+        return;
+      }
+      rmSync(effectiveProfileDir, { recursive: true, force: true });
+    };
   }
 
-  const context = await chromium.launchPersistentContext(effectiveProfileDir, {
-    executablePath: resolveChromeExecutablePath(),
-    headless: options.headless,
-    viewport: { width: 1440, height: 960 },
-  });
+  let context: BrowserContext | undefined;
+  try {
+    context = await (dependencies.launchPersistentContext ?? chromium.launchPersistentContext.bind(chromium))(
+      effectiveProfileDir,
+      {
+        executablePath: (dependencies.resolveChromeExecutablePath ?? resolveChromeExecutablePath)(),
+        headless: options.headless,
+        viewport: { width: 1440, height: 960 },
+      },
+    );
 
-  const page = context.pages()[0] ?? (await context.newPage());
-  page.setDefaultTimeout(15_000);
-  return {
-    context,
-    page,
-    ...(cleanup ? { cleanup } : {}),
-  };
+    const page = context.pages()[0] ?? (await context.newPage());
+    page.setDefaultTimeout(15_000);
+    return {
+      context,
+      page,
+      ...(cleanup ? { cleanup } : {}),
+    };
+  } catch (error) {
+    try {
+      if (context) {
+        await closeOutlookResources(context, cleanup);
+      } else {
+        cleanup?.();
+      }
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        "Outlook browser session setup failed and its partial resources could not be fully closed.",
+      );
+    }
+    throw error;
+  }
 }
 
 async function bodyText(page: Page): Promise<string> {

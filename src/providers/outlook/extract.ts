@@ -1,4 +1,10 @@
-import { errors, type APIRequestContext, type BrowserContext, type Page } from "playwright-core";
+import {
+  errors,
+  type APIRequestContext,
+  type BrowserContext,
+  type Page,
+  type Request,
+} from "playwright-core";
 import { assertOutlookNotOnSignInPage } from "./auth-state.js";
 
 const DEFAULT_OUTLOOK_URL = "https://outlook.office.com/mail/";
@@ -155,7 +161,7 @@ export async function captureOutlookServiceSession(
   let preferredServiceUrl: string | null = null;
   let fallbackServiceUrl: string | null = null;
 
-  context.on("request", (request) => {
+  const handleRequest = (request: Request): void => {
     if (!["fetch", "xhr"].includes(request.resourceType())) {
       return;
     }
@@ -181,38 +187,43 @@ export async function captureOutlookServiceSession(
         headers[key] = value;
       }
     }
-  });
+  };
 
-  await page.goto(options.outlookUrl ?? DEFAULT_OUTLOOK_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: options.timeoutMs,
-  });
-  await waitForOutlookMailboxReady(page, options.timeoutMs);
+  context.on("request", handleRequest);
+  try {
+    await page.goto(options.outlookUrl ?? DEFAULT_OUTLOOK_URL, {
+      waitUntil: "domcontentloaded",
+      timeout: options.timeoutMs,
+    });
+    await waitForOutlookMailboxReady(page, options.timeoutMs);
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await page.waitForTimeout(3_000);
-    const serviceUrl = preferredServiceUrl ?? inferServiceUrlFromMailboxUrl(page.url()) ?? fallbackServiceUrl;
-    if (serviceUrl && hasCompleteOwaHeaders(headers)) {
-      return {
-        serviceUrl,
-        headers,
-      };
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await page.waitForTimeout(3_000);
+      const serviceUrl = preferredServiceUrl ?? inferServiceUrlFromMailboxUrl(page.url()) ?? fallbackServiceUrl;
+      if (serviceUrl && hasCompleteOwaHeaders(headers)) {
+        return {
+          serviceUrl,
+          headers,
+        };
+      }
+
+      if (attempt === 0) {
+        await page.reload({ waitUntil: "domcontentloaded", timeout: options.timeoutMs });
+        await waitForOutlookMailboxReady(page, options.timeoutMs);
+        continue;
+      }
+
+      if (attempt === 1) {
+        await applyUnreadFilter(page);
+      }
     }
 
-    if (attempt === 0) {
-      await page.reload({ waitUntil: "domcontentloaded", timeout: options.timeoutMs });
-      await waitForOutlookMailboxReady(page, options.timeoutMs);
-      continue;
-    }
-
-    if (attempt === 1) {
-      await applyUnreadFilter(page);
-    }
+    throw new Error(
+      `Could not capture Outlook service headers. Observed service URLs: ${observedServiceUrls.join(", ") || "none"}.`,
+    );
+  } finally {
+    context.off("request", handleRequest);
   }
-
-  throw new Error(
-    `Could not capture Outlook service headers. Observed service URLs: ${observedServiceUrls.join(", ") || "none"}.`,
-  );
 }
 
 export async function applyUnreadFilter(page: Page): Promise<void> {
@@ -509,33 +520,37 @@ export async function fetchConversationBundle(
     data: JSON.stringify(buildConversationPayload(conversationId)),
   });
 
-  if (!response.ok()) {
-    throw new Error(
-      `GetConversationItems failed with status ${response.status()} for conversation ${conversationId}.`,
-    );
-  }
-
-  const data = await response.json();
-  const conversationNodes = (
-    data?.Body?.ResponseMessages?.Items?.[0]?.Conversation?.ConversationNodes ?? []
-  ) as Array<Record<string, unknown>>;
-
-  const entries: OutlookConversationItem[] = [];
-  for (const node of conversationNodes) {
-    const nodeMetadata = {
-      parentInternetMessageId:
-        typeof node.ParentInternetMessageId === "string" ? node.ParentInternetMessageId : null,
-      hasQuotedText: typeof node.HasQuotedText === "boolean" ? node.HasQuotedText : null,
-      isRootNode: typeof node.IsRootNode === "boolean" ? node.IsRootNode : null,
-    };
-    const items = (node.Items ?? []) as Array<Record<string, unknown>>;
-    for (const item of items) {
-      entries.push({ item, nodeMetadata });
+  try {
+    if (!response.ok()) {
+      throw new Error(
+        `GetConversationItems failed with status ${response.status()} for conversation ${conversationId}.`,
+      );
     }
-  }
 
-  return {
-    conversationId,
-    entries,
-  };
+    const data = await response.json();
+    const conversationNodes = (
+      data?.Body?.ResponseMessages?.Items?.[0]?.Conversation?.ConversationNodes ?? []
+    ) as Array<Record<string, unknown>>;
+
+    const entries: OutlookConversationItem[] = [];
+    for (const node of conversationNodes) {
+      const nodeMetadata = {
+        parentInternetMessageId:
+          typeof node.ParentInternetMessageId === "string" ? node.ParentInternetMessageId : null,
+        hasQuotedText: typeof node.HasQuotedText === "boolean" ? node.HasQuotedText : null,
+        isRootNode: typeof node.IsRootNode === "boolean" ? node.IsRootNode : null,
+      };
+      const items = (node.Items ?? []) as Array<Record<string, unknown>>;
+      for (const item of items) {
+        entries.push({ item, nodeMetadata });
+      }
+    }
+
+    return {
+      conversationId,
+      entries,
+    };
+  } finally {
+    await response.dispose();
+  }
 }

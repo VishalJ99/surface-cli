@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { connect, type Socket } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { MailAccount } from "./contracts/account.js";
@@ -15,6 +16,7 @@ import type {
   SentQuery,
 } from "./contracts/mail.js";
 import { errorToEnvelope, SurfaceError } from "./lib/errors.js";
+import { processCommandLineTokens, snapshotProcessIdentities, type ProcessIdentitySnapshot } from "./lib/process-identity.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { makeSessionId } from "./refs.js";
 import type { AccountRuntimeContext, RuntimeContext } from "./runtime.js";
@@ -26,6 +28,23 @@ export const DEFAULT_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 // Chrome launch/profile cloning plus navigation and mailbox readiness each need their budget.
 const SESSION_BOOTSTRAP_ALLOWANCE_MS = 60_000;
 const SESSION_POLL_INTERVAL_MS = 200;
+
+const SESSION_RPC_SHUTDOWN_GRACE_MS = 5_000;
+const SESSION_SIGTERM_GRACE_MS = 35_000;
+const SESSION_SIGKILL_GRACE_MS = 2_000;
+
+interface SessionProcessOperations {
+  isPidAlive(pid: number): boolean;
+  inspectProcess(pid: number): ProcessIdentitySnapshot | undefined;
+  kill(pid: number, signal: NodeJS.Signals): void;
+  nowMs(): number;
+  sleep(ms: number): Promise<void>;
+}
+const defaultSessionProcessOperations: SessionProcessOperations = {
+  isPidAlive: pid => isProcessAlive(pid),
+  inspectProcess: pid => snapshotProcessIdentities().find(candidate => candidate.pid === pid),
+  kill: (pid, signal) => { process.kill(pid, signal); }, nowMs: Date.now, sleep,
+};
 
 export type SessionRpcMethod =
   | "ping"
@@ -62,8 +81,8 @@ function sessionDaemonPath(): { command: string; args: string[] } {
 
   if (modulePath.endsWith(".ts")) {
     return {
-      command: join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx"),
-      args: [join(moduleDir, "session-daemon.ts")],
+      command: process.execPath,
+      args: ["--import", createRequire(import.meta.url).resolve("tsx"), join(moduleDir, "session-daemon.ts")],
     };
   }
 
@@ -275,30 +294,111 @@ function spawnWarmSession(context: RuntimeContext, record: StoredSessionRecord):
   context.db.updateSessionProcessInfo(record.session_id, child.pid ?? null);
 }
 
-async function failOwnedStartup(context: RuntimeContext, sessionId: string, error: unknown, ownedPid?: number | null): Promise<void> {
-  const record = context.db.getSession(sessionId);
-  const pid = ownedPid ?? record?.pid;
-  if (pid && isProcessAlive(pid)) {
-    // Signal only the owned detached daemon group; Playwright handles browser shutdown on SIGTERM.
-    const target = process.platform === "win32" ? pid : -pid;
-    try { process.kill(target, "SIGTERM"); } catch { /* Already exited. */ }
-    const deadline = Date.now() + 2_000;
-    while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
-    if (isProcessAlive(pid)) {
-      try { process.kill(target, "SIGKILL"); } catch { /* Already exited. */ }
+function ownedSessionProcess(record: StoredSessionRecord, operations: SessionProcessOperations): ProcessIdentitySnapshot | undefined {
+  if (!record.pid || !operations.isPidAlive(record.pid)) return undefined;
+  const identity = operations.inspectProcess(record.pid);
+  if (!identity || identity.pid !== record.pid || !identity.executablePath.startsWith("/") ||
+      resolve(identity.executablePath) !== resolve(process.execPath)) return undefined;
+  const args = processCommandLineTokens(identity.commandLine);
+  const entrypoint = sessionDaemonPath().args.at(-1)!;
+  let entrypointIndex = 1;
+  if (args[entrypointIndex] === "--import") {
+    const loader = args[entrypointIndex + 1];
+    try {
+      const path = loader?.startsWith("file:") ? fileURLToPath(loader) : loader;
+      if (!path || realpathSync(path) !== realpathSync(createRequire(import.meta.url).resolve("tsx"))) return undefined;
+    } catch { return undefined; }
+    entrypointIndex += 2;
+  }
+  // The daemon must be the actual Node entrypoint, never an argument to another script.
+  if (args[entrypointIndex] !== entrypoint) return undefined;
+  const exactFlag = (name: string, value: string) => {
+    const indexes = args.flatMap((arg, index) => arg === name ? [index] : []);
+    return indexes.length === 1 && args[indexes[0]! + 1] === value;
+  };
+  if (!exactFlag("--session-id", record.session_id) || !exactFlag("--socket-path", record.socket_path) ||
+      !exactFlag("--account-id", record.account_id)) return undefined;
+  return identity;
+}
+
+async function waitForOwnedProcessExit(record: StoredSessionRecord, owner: ProcessIdentitySnapshot, timeoutMs: number, operations: SessionProcessOperations): Promise<boolean> {
+  const deadline = operations.nowMs() + timeoutMs;
+  while (true) {
+    const current = ownedSessionProcess(record, operations);
+    if (!current || current.startedAt !== owner.startedAt) return true;
+    if (operations.nowMs() >= deadline) return false;
+    await operations.sleep(Math.min(SESSION_POLL_INTERVAL_MS, Math.max(1, deadline - operations.nowMs())));
+  }
+}
+
+async function shutdownSessionRecord(context: RuntimeContext, record: StoredSessionRecord, options: {
+  status: "closed" | "expired" | "failed"; errorDetail?: string | null; operations?: SessionProcessOperations;
+}): Promise<StoredSessionRecord> {
+  const operations = options.operations ?? defaultSessionProcessOperations;
+  const owner = ownedSessionProcess(record, operations);
+  let shutdownRequested = false;
+  if (record.status === "running" && existsSync(record.socket_path)) {
+    try {
+      await callSession(record, "shutdown", {}, SESSION_RPC_SHUTDOWN_GRACE_MS);
+      shutdownRequested = true;
+    } catch { /* A verified process may still be terminated below. */ }
+  }
+  if (owner) {
+    const signalOwned = (signal: NodeJS.Signals) => {
+      // Re-read executable, entrypoint, bindings and start identity before EACH signal.
+      const current = ownedSessionProcess(record, operations);
+      if (!current || current.startedAt !== owner.startedAt) return;
+      try { operations.kill(owner.pid, signal); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    };
+    if (!shutdownRequested || !await waitForOwnedProcessExit(record, owner, SESSION_RPC_SHUTDOWN_GRACE_MS, operations)) {
+      signalOwned("SIGTERM");
+      if (!await waitForOwnedProcessExit(record, owner, SESSION_SIGTERM_GRACE_MS, operations)) {
+        signalOwned("SIGKILL");
+        await waitForOwnedProcessExit(record, owner, SESSION_SIGKILL_GRACE_MS, operations);
+      }
     }
   }
-  if (record && existsSync(record.socket_path)) rmSync(record.socket_path, { force: true });
-  context.db.markSessionClosed(sessionId, "failed", {
-    errorDetail: error instanceof Error ? error.message : String(error), pid: null,
+  const currentOwner = ownedSessionProcess(record, operations);
+  const processStillAlive = Boolean(owner && currentOwner?.startedAt === owner.startedAt);
+  if (existsSync(record.socket_path)) rmSync(record.socket_path, { force: true });
+  context.db.markSessionClosed(record.session_id, options.status, {
+    errorDetail: processStillAlive ? `${options.errorDetail ?? "Session shutdown failed."} Process ${record.pid} is still alive.` : options.errorDetail ?? null,
+    pid: processStillAlive ? record.pid : null,
+  });
+  if (processStillAlive) throw new SurfaceError("transport_error", `Session '${record.session_id}' could not terminate its owned daemon.`, { retryable: true });
+  return context.db.getSession(record.session_id)!;
+}
+
+export async function reconcileWarmSessions(context: RuntimeContext): Promise<void> {
+  for (const record of context.db.listSessions()) {
+    if (!["starting", "running"].includes(record.status)) continue;
+    const expiry = sessionExpiry(record);
+    const startingTimedOut = record.status === "starting" && Date.now() >= parseTimestamp(record.created_at) + sessionStartupTimeoutMs(context);
+    if (expiry.expired) {
+      await shutdownSessionRecord(context, record, { status: "expired", errorDetail: `Session expired due to ${expiry.reason}.` });
+    } else if (!isProcessAlive(record.pid)) {
+      await shutdownSessionRecord(context, record, { status: "failed", errorDetail: "Session owner process is no longer running." });
+    } else if (startingTimedOut || (record.status === "running" && !existsSync(record.socket_path))) {
+      await shutdownSessionRecord(context, record, { status: "failed", errorDetail: startingTimedOut
+        ? "Session startup exceeded its bounded timeout." : "Session socket disappeared while its owner process was still running." });
+    }
+  }
+}
+
+async function failOwnedStartup(context: RuntimeContext, sessionId: string, error: unknown, ownedPid?: number | null, operations?: SessionProcessOperations): Promise<void> {
+  const record = context.db.getSession(sessionId);
+  if (!record) return;
+  await shutdownSessionRecord(context, { ...record, pid: ownedPid ?? record.pid }, {
+    status: "failed", errorDetail: error instanceof Error ? error.message : String(error), ...(operations ? { operations } : {}),
   });
 }
 
-async function finishOwnedStartup(context: RuntimeContext, record: StoredSessionRecord): Promise<StoredSessionRecord> {
+async function finishOwnedStartup(context: RuntimeContext, record: StoredSessionRecord, operations?: SessionProcessOperations): Promise<StoredSessionRecord> {
   try {
     return await waitForSessionReady(context, record.session_id);
   } catch (error) {
-    await failOwnedStartup(context, record.session_id, error, record.pid);
+    await failOwnedStartup(context, record.session_id, error, record.pid, operations);
     throw error;
   }
 }
@@ -312,6 +412,7 @@ export async function startWarmSession(
   },
 ): Promise<StoredSessionRecord> {
   assertWarmSessionSupported(account);
+  await reconcileWarmSessions(context);
 
   const record = context.db.transaction(() => {
     const starting = createWarmSessionRecord(context, account, options);
@@ -336,6 +437,7 @@ async function getOrStartWarmSession(
   lifecycle: DefaultSessionLifecycle = defaultSessionLifecycle,
   excludedIds: Set<string> = new Set(),
 ): Promise<StoredSessionRecord> {
+  if (lifecycle === defaultSessionLifecycle) await reconcileWarmSessions(context);
   const reservation = context.db.transaction(() => {
     for (const record of context.db.listSessions()) {
       if (excludedIds.has(record.session_id) || record.account_id !== context.account.account_id || record.provider !== context.account.provider ||
@@ -389,7 +491,7 @@ export async function resolveReadSession(
   return (await getOrStartWarmSession(context)).session_id;
 }
 
-export const sessionTestHooks = { getOrStartWarmSession, waitForSessionReady, finishOwnedStartup, sessionHasCompatibleConfig };
+export const sessionTestHooks = { getOrStartWarmSession, waitForSessionReady, finishOwnedStartup, sessionHasCompatibleConfig, shutdownSessionRecord, ownedSessionProcess };
 
 function validateSessionForAccount(
   context: RuntimeContext,
@@ -403,19 +505,17 @@ function validateSessionForAccount(
     });
   }
 
-  if (record.account_id !== account.account_id) {
+  if (record.account_id !== account.account_id || record.provider !== account.provider || record.transport !== account.transport) {
     throw new SurfaceError(
       "invalid_argument",
-      `Session '${sessionId}' belongs to a different account.`,
+      `Session '${sessionId}' belongs to a different account/provider/transport.`,
       { account: account.name },
     );
   }
 
   const expiry = sessionExpiry(record);
-  if (expiry.expired && record.status === "running") {
-    context.db.markSessionClosed(sessionId, "expired", {
-      errorDetail: `Session expired due to ${expiry.reason ?? "timeout"}.`,
-    });
+  if (expiry.expired) {
+    throw new SurfaceError("session_invalid", `Session expired due to ${expiry.reason ?? "timeout"}.`, { account: account.name });
   }
 
   const refreshed = context.db.getSession(sessionId) ?? record;
@@ -428,6 +528,16 @@ function validateSessionForAccount(
   }
 
   return refreshed;
+}
+
+async function validateCallerSession(context: AccountRuntimeContext, sessionId: string): Promise<StoredSessionRecord> {
+  const record = context.db.getSession(sessionId);
+  // Never terminate a session bound to a different caller account.
+  if (record?.account_id === context.account.account_id && record.provider === context.account.provider &&
+      record.transport === context.account.transport && sessionExpiry(record).expired && record.status === "running") {
+    await shutdownSessionRecord(context, record, { status: "expired", errorDetail: `Session expired due to ${sessionExpiry(record).reason}.` });
+  }
+  return validateSessionForAccount(context, sessionId, context.account);
 }
 
 async function callSession(record: StoredSessionRecord, method: SessionRpcMethod, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
@@ -496,26 +606,7 @@ export async function stopWarmSession(context: RuntimeContext, sessionId: string
     throw new SurfaceError("not_found", `Session '${sessionId}' was not found.`);
   }
 
-  try {
-    if (record.status === "running" && existsSync(record.socket_path)) {
-      await callSession(record, "shutdown", {});
-    }
-  } catch {
-    if (record.pid) {
-      try {
-        process.kill(record.pid, "SIGTERM");
-      } catch {
-        // Ignore missing processes.
-      }
-    }
-  } finally {
-    if (existsSync(record.socket_path)) {
-      rmSync(record.socket_path, { force: true });
-    }
-    context.db.markSessionClosed(sessionId, "closed", { pid: null });
-  }
-
-  return context.db.getSession(sessionId)!;
+  return shutdownSessionRecord(context, record, { status: "closed" });
 }
 
 export async function sessionSearch(
@@ -523,7 +614,7 @@ export async function sessionSearch(
   sessionId: string,
   query: SearchQuery,
 ): Promise<NormalizedThreadRecord[]> {
-  const record = validateSessionForAccount(context, sessionId, context.account);
+  const record = await validateCallerSession(context, sessionId);
   const result = await callSession(record, "search", { query });
   context.db.touchSession(sessionId);
   return result as NormalizedThreadRecord[];
@@ -534,7 +625,7 @@ export async function sessionFetchUnread(
   sessionId: string,
   query: FetchUnreadQuery,
 ): Promise<NormalizedThreadRecord[]> {
-  const record = validateSessionForAccount(context, sessionId, context.account);
+  const record = await validateCallerSession(context, sessionId);
   const result = await callSession(record, "fetch-unread", { query });
   context.db.touchSession(sessionId);
   return result as NormalizedThreadRecord[];
@@ -545,7 +636,7 @@ export async function sessionSent(
   sessionId: string,
   query: SentQuery,
 ): Promise<SentMessageResult[]> {
-  const record = validateSessionForAccount(context, sessionId, context.account);
+  const record = await validateCallerSession(context, sessionId);
   const result = await callSession(record, "sent", { query });
   context.db.touchSession(sessionId);
   return result as SentMessageResult[];
@@ -556,7 +647,7 @@ export async function sessionRefreshThread(
   sessionId: string,
   threadRef: string,
 ): Promise<void> {
-  const record = validateSessionForAccount(context, sessionId, context.account);
+  const record = await validateCallerSession(context, sessionId);
   await callSession(record, "refresh-thread", { thread_ref: threadRef });
   context.db.touchSession(sessionId);
 }
@@ -567,7 +658,7 @@ export async function sessionReadMessage(
   messageRef: string,
   refresh: boolean,
 ): Promise<ReadResultEnvelope> {
-  const record = validateSessionForAccount(context, sessionId, context.account);
+  const record = await validateCallerSession(context, sessionId);
   const result = await callSession(record, "read-message", {
     message_ref: messageRef,
     refresh,

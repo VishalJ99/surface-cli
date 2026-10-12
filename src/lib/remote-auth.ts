@@ -14,6 +14,7 @@ import { buildAccountPaths } from "../paths.js";
 import { SurfaceError } from "./errors.js";
 import { gmailClientSecretPath } from "../providers/gmail/oauth.js";
 import {
+  closeOutlookSession,
   launchOutlookSession,
   probeOutlookAuth,
   promptForOutlookLogin,
@@ -700,8 +701,7 @@ async function runRemoteOutlookLogin(
       );
     }
   } finally {
-    await session.context.close();
-    session.cleanup?.();
+    await closeOutlookSession(session);
   }
 
   const surfaceRoot = await resolveRemoteSurfaceRoot(remoteHost);

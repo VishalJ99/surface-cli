@@ -39,12 +39,14 @@ import {
   DEFAULT_OUTLOOK_TEMP_PROFILE_MAX_AGE_SECONDS,
   pruneOutlookTempProfiles,
 } from "./providers/outlook/temp-profiles.js";
+import { reapOutlookOrphanChromium } from "./providers/outlook/orphan-chromium.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
 import {
   DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
   DEFAULT_SESSION_MAX_AGE_SECONDS,
   listWarmSessions,
   resolveReadSession,
+  reconcileWarmSessions,
   sessionFetchUnread,
   sessionReadMessage,
   sessionRefreshThread,
@@ -765,7 +767,8 @@ sessionCommand
   });
 
 sessionCommand.command("list").action(async (_options, command: Command) => {
-  await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+  await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
+    await reconcileWarmSessions(context);
     writeJson({
       schema_version: "1",
       command: "session-list",
@@ -1321,7 +1324,10 @@ cacheCommand
     DEFAULT_OUTLOOK_TEMP_PROFILE_MAX_AGE_SECONDS,
   )
   .action(async (options: { dryRun: boolean; maxAgeSeconds: number }, command: Command) => {
-    await runAction(command.optsWithGlobals<GlobalOptions>(), (context) => {
+    await runAction(command.optsWithGlobals<GlobalOptions>(), async (context) => {
+      const outlookOrphanChromium = await reapOutlookOrphanChromium({
+        dryRun: options.dryRun,
+      });
       const outlookTempProfiles = pruneOutlookTempProfiles({
         dryRun: options.dryRun,
         maxAgeSeconds: options.maxAgeSeconds,
@@ -1329,8 +1335,11 @@ cacheCommand
       writeJson({
         schema_version: "1",
         command: "cache-prune",
-        status: outlookTempProfiles.skipped_error > 0 ? "partial" : "ok",
+        status: outlookTempProfiles.skipped_error > 0 || outlookOrphanChromium.errors.length > 0
+          ? "partial"
+          : "ok",
         cache_root: context.paths.rootDir,
+        outlook_orphan_chromium: outlookOrphanChromium,
         outlook_temp_profiles: outlookTempProfiles,
       });
     });

@@ -44,7 +44,13 @@ import { makeAttachmentId, makeMessageRef, makeThreadRef } from "../../refs.js";
 import { summarizeAndPersistThreads } from "../../summarizer.js";
 import type { AuthStatus, MailProviderAdapter, ProviderContext } from "../types.js";
 import { annotateBodyWithInlineAttachments } from "../shared/inline-attachments.js";
-import { launchOutlookSession, probeOutlookAuth, promptForOutlookLogin, type OutlookSession } from "./session.js";
+import {
+  closeOutlookSession,
+  launchOutlookSession,
+  probeOutlookAuth,
+  promptForOutlookLogin,
+  type OutlookSession,
+} from "./session.js";
 import {
   applySearchQuery,
   applyUnreadFilter,
@@ -92,8 +98,7 @@ async function withManagedOutlookSession<T>(
   try {
     return await work(session);
   } finally {
-    await session.context.close();
-    session.cleanup?.();
+    await closeOutlookSession(session);
   }
 }
 
@@ -1569,20 +1574,24 @@ async function performOutlookRsvpAction(
     },
   );
 
-  if (!serviceResponse.ok()) {
-    throw new SurfaceError(
-      "transport_error",
-      `Outlook RSVP request failed with status ${serviceResponse.status()}.`,
-    );
-  }
+  try {
+    if (!serviceResponse.ok()) {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook RSVP request failed with status ${serviceResponse.status()}.`,
+      );
+    }
 
-  const data = await serviceResponse.json();
-  const responseMessage = data?.Body?.ResponseMessages?.Items?.[0];
-  if (responseMessage?.ResponseCode !== "NoError") {
-    throw new SurfaceError(
-      "transport_error",
-      `Outlook RSVP request failed with response code '${responseMessage?.ResponseCode ?? "UnknownError"}'.`,
-    );
+    const data = await serviceResponse.json();
+    const responseMessage = data?.Body?.ResponseMessages?.Items?.[0];
+    if (responseMessage?.ResponseCode !== "NoError") {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook RSVP request failed with response code '${responseMessage?.ResponseCode ?? "UnknownError"}'.`,
+      );
+    }
+  } finally {
+    await serviceResponse.dispose();
   }
 }
 
@@ -1613,19 +1622,23 @@ async function performOutlookReadStateAction(
     },
   );
 
-  if (!response.ok()) {
-    throw new SurfaceError(
-      "transport_error",
-      `Outlook read-state update failed with status ${response.status()}.`,
-    );
-  }
+  try {
+    if (!response.ok()) {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook read-state update failed with status ${response.status()}.`,
+      );
+    }
 
-  const data = await response.json();
-  if (typeof data?.IsRead !== "boolean" || data.IsRead !== !unread) {
-    throw new SurfaceError(
-      "transport_error",
-      `Outlook read-state update did not return the expected IsRead=${!unread} state.`,
-    );
+    const data = await response.json();
+    if (typeof data?.IsRead !== "boolean" || data.IsRead !== !unread) {
+      throw new SurfaceError(
+        "transport_error",
+        `Outlook read-state update did not return the expected IsRead=${!unread} state.`,
+      );
+    }
+  } finally {
+    await response.dispose();
   }
 }
 
@@ -1945,8 +1958,7 @@ async function mutateOutlookReadState(
       await performOutlookReadStateAction(session, target.locator, unread, context.config.providerTimeoutMs);
     }
   } finally {
-    await session.context.close();
-    session.cleanup?.();
+    await closeOutlookSession(session);
   }
 
   const threadRefs = targets.map((target) => target.stored.thread_ref);
@@ -1977,8 +1989,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await promptForOutlookLogin(profileDir);
       return await probeOutlookAuth(session.page, { timeoutMs: context.config.providerTimeoutMs });
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
   }
 
@@ -2015,8 +2026,9 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
             : "Could not probe Outlook auth state.",
       };
     } finally {
-      await session?.context.close();
-      session?.cleanup?.();
+      if (session) {
+        await closeOutlookSession(session);
+      }
     }
   }
 
@@ -2094,8 +2106,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     try {
       await performOutlookRsvpAction(session, locator, response, context.config.providerTimeoutMs);
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     const refreshed = await refreshStoredMessage(account, messageRef, context);
@@ -2171,8 +2182,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     const resolved = await findResolvedSearchTarget(account, normalizedInput.subject, context);
@@ -2227,8 +2237,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     await refreshOutlookConversation(account, target.locator.conversation_id, context);
@@ -2285,8 +2294,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     await refreshOutlookConversation(account, target.locator.conversation_id, context);
@@ -2353,8 +2361,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       forwardedSubject = await session.page.locator('input[aria-label="Subject"]').inputValue();
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     const resolved = await findResolvedSearchTarget(account, forwardedSubject, context);
@@ -2399,8 +2406,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await session.page.locator('button[aria-label="Archive"]').first().click();
       await session.page.waitForTimeout(2_500);
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     context.db.markThreadArchived(target.stored.thread_ref);
@@ -2434,26 +2440,29 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
         },
       );
 
-      if (!response.ok()) {
-        throw new SurfaceError(
-          "transport_error",
-          `Outlook attachment download failed with status ${response.status()}.`,
-          {
-            account: account.name,
-            messageRef,
-            threadRef: target.stored.thread_ref,
-          },
-        );
-      }
+      try {
+        if (!response.ok()) {
+          throw new SurfaceError(
+            "transport_error",
+            `Outlook attachment download failed with status ${response.status()}.`,
+            {
+              account: account.name,
+              messageRef,
+              threadRef: target.stored.thread_ref,
+            },
+          );
+        }
 
-      const downloadDir = join(context.accountPaths.downloadsDir, messageRef);
-      mkdirSync(downloadDir, { recursive: true });
-      const filename = sanitizeAttachmentFilename(target.attachment.filename);
-      savedTo = join(downloadDir, `${attachmentId}__${filename}`);
-      writeFileSync(savedTo, await response.body());
+        const downloadDir = join(context.accountPaths.downloadsDir, messageRef);
+        mkdirSync(downloadDir, { recursive: true });
+        const filename = sanitizeAttachmentFilename(target.attachment.filename);
+        savedTo = join(downloadDir, `${attachmentId}__${filename}`);
+        writeFileSync(savedTo, await response.body());
+      } finally {
+        await response.dispose();
+      }
     } finally {
-      await session.context.close();
-      session.cleanup?.();
+      await closeOutlookSession(session);
     }
 
     context.db.updateAttachmentSavedTo(attachmentId, savedTo);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { existsSync, rmSync } from "node:fs";
 
 import type { FetchUnreadQuery, SearchQuery, SentQuery } from "./contracts/mail.js";
@@ -12,7 +12,11 @@ import {
   refreshOutlookThreadWithSession,
   searchOutlookWithSession,
 } from "./providers/outlook/adapter.js";
-import { launchOutlookSession, probeOutlookAuth } from "./providers/outlook/session.js";
+import {
+  closeOutlookSession,
+  launchOutlookSession,
+  probeOutlookAuth,
+} from "./providers/outlook/session.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
 import { closeEmptySessionProbe, respondToSessionHealthCheck, sessionExpiry } from "./session.js";
 
@@ -109,6 +113,7 @@ async function main(): Promise<void> {
   let inflight = Promise.resolve();
   let session: Awaited<ReturnType<typeof launchOutlookSession>> | undefined;
   let server: ReturnType<typeof createServer> | undefined;
+  const sockets = new Set<Socket>();
 
   const record = runtime.db.getSession(args.sessionId);
   if (!record) {
@@ -148,24 +153,21 @@ async function main(): Promise<void> {
     });
 
     try {
-      await new Promise<void>((resolve) => {
-        if (!server) {
-          resolve();
-          return;
-        }
-        server.close(() => resolve());
-      });
+      server?.close();
     } catch {
       // Ignore close failures during shutdown.
     }
 
     if (session) {
       try {
-        await session.context.close();
+        await closeOutlookSession(session);
       } catch {
         // Ignore close failures during shutdown.
       }
-      session.cleanup?.();
+    }
+
+    for (const socket of sockets) {
+      socket.destroy();
     }
 
     if (existsSync(args.socketPath)) {
@@ -206,6 +208,8 @@ async function main(): Promise<void> {
     }
 
     server = createServer({ allowHalfOpen: true }, (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
       let raw = "";
       socket.on("error", () => socket.destroy());
       socket.setEncoding("utf8");
@@ -315,6 +319,14 @@ async function main(): Promise<void> {
       server!.listen(args.socketPath, () => resolve());
     });
 
+    const startingRecord = runtime.db.getSession(args.sessionId);
+    if (!startingRecord || startingRecord.status !== "starting") {
+      throw new SurfaceError(
+        "session_invalid",
+        `Session '${args.sessionId}' was stopped before startup completed.`,
+        { account: account.name },
+      );
+    }
     runtime.db.markSessionRunning(args.sessionId, process.pid);
     resetIdleTimer();
     maxAgeTimer = setDeadlineTimer(() => {
