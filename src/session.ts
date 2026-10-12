@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,7 @@ import type {
   SentMessageResult,
   SentQuery,
 } from "./contracts/mail.js";
-import { SurfaceError } from "./lib/errors.js";
+import { errorToEnvelope, SurfaceError } from "./lib/errors.js";
 import { nowIsoUtc } from "./lib/time.js";
 import { makeSessionId } from "./refs.js";
 import type { AccountRuntimeContext, RuntimeContext } from "./runtime.js";
@@ -23,7 +23,8 @@ import type { StoredSessionRecord } from "./state/database.js";
 export const DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 60 * 60;
 export const DEFAULT_SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
-const SESSION_STARTUP_TIMEOUT_MS = 20_000;
+// Chrome launch/profile cloning plus navigation and mailbox readiness each need their budget.
+const SESSION_BOOTSTRAP_ALLOWANCE_MS = 60_000;
 const SESSION_POLL_INTERVAL_MS = 200;
 
 export type SessionRpcMethod =
@@ -84,7 +85,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isWarmSessionSupported(account: MailAccount): boolean {
+export function isWarmSessionSupported(account: MailAccount): boolean {
   return account.provider === "outlook" && account.transport === "outlook-web-playwright";
 }
 
@@ -140,34 +141,166 @@ function assertWarmSessionSupported(account: MailAccount): void {
   );
 }
 
+export function sessionStartupTimeoutMs(context: RuntimeContext): number {
+  return SESSION_BOOTSTRAP_ALLOWANCE_MS + 2 * context.config.providerTimeoutMs;
+}
+
+function isProcessAlive(pid: number | null): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+export function sessionConfigFingerprint(context: RuntimeContext, env: NodeJS.ProcessEnv = process.env): string {
+  // Hash effective settings and inherited summarizer credentials, never return raw secrets.
+  return createHash("sha256").update(JSON.stringify({
+    config: context.config,
+    openRouterKey: env.OPENROUTER_API_KEY ?? null,
+    openClawAgent: env.SURFACE_OPENCLAW_AGENT ?? "main",
+    openClawConfig: env.OPENCLAW_CONFIG_PATH ?? null,
+    openClawState: env.OPENCLAW_STATE_DIR ?? null,
+    chromePath: env.SURFACE_CHROME_PATH ?? null,
+  })).digest("hex");
+}
+
+export function sessionHealthResult(context: AccountRuntimeContext, sessionId: string, token: string | undefined) {
+  const record = validateSessionForAccount(context, sessionId, context.account);
+  if (token !== record.auth_token) throw new SurfaceError("forbidden", "Session token mismatch.");
+  return { session_id: sessionId, status: "running", config_fingerprint: sessionConfigFingerprint(context) };
+}
+
+export function respondToSessionHealthCheck(context: AccountRuntimeContext, sessionId: string, socket: Socket, raw: string): boolean {
+  try {
+    const request = JSON.parse(raw) as { token?: string; method?: string };
+    if (request.method !== "ping") return false;
+    socket.end(JSON.stringify({ ok: true, result: sessionHealthResult(context, sessionId, request.token) }));
+  } catch (error) {
+    socket.end(JSON.stringify({ ok: false, error: errorToEnvelope(error).error }));
+  }
+  return true;
+}
+
+async function sessionHasCompatibleConfig(context: RuntimeContext, record: StoredSessionRecord): Promise<boolean> {
+  const health = await callSession(record, "ping", {}, 5_000) as { config_fingerprint?: string };
+  return health.config_fingerprint === sessionConfigFingerprint(context);
+}
+
+export function closeEmptySessionProbe(socket: Socket, raw: string): boolean {
+  if (raw.trim()) return false;
+  socket.end();
+  return true;
+}
+
+async function checkSessionSocket(record: StoredSessionRecord, timeoutMs: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = connect(record.socket_path);
+    const timer = setTimeout(() => {
+      socket.destroy(new SurfaceError("transport_error", `Timed out checking session '${record.session_id}' readiness.`, { retryable: true }));
+    }, timeoutMs);
+    socket.once("error", reject);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve();
+    });
+    socket.once("close", () => clearTimeout(timer));
+  });
+}
+
 async function waitForSessionReady(context: RuntimeContext, sessionId: string): Promise<StoredSessionRecord> {
-  const deadline = Date.now() + SESSION_STARTUP_TIMEOUT_MS;
+  const initial = context.db.getSession(sessionId);
+  const deadline = initial?.status === "running"
+    ? Date.now() + 5_000
+    : parseTimestamp(initial?.created_at ?? nowIsoUtc()) + sessionStartupTimeoutMs(context);
 
   while (Date.now() < deadline) {
     const record = context.db.getSession(sessionId);
     if (!record) {
-      throw new SurfaceError("not_found", `Session '${sessionId}' was not found after startup.`, {
-        account: null,
-      });
+      throw new SurfaceError("not_found", `Session '${sessionId}' was not found after startup.`);
     }
-
-    if (record.status === "running") {
+    if (record.status === "failed" || record.status === "closed" || record.status === "expired") {
+      throw new SurfaceError("transport_error", record.error_detail || `Session '${sessionId}' failed to start.`);
+    }
+    if (record.pid && !isProcessAlive(record.pid)) {
+      throw new SurfaceError("transport_error", `Session '${sessionId}' exited before becoming ready.`);
+    }
+    if (record.status === "running" && existsSync(record.socket_path)) {
+      await checkSessionSocket(record, Math.min(5_000, Math.max(1, deadline - Date.now())));
       return record;
     }
-
-    if (record.status === "failed" || record.status === "closed" || record.status === "expired") {
-      throw new SurfaceError(
-        "transport_error",
-        record.error_detail || `Session '${sessionId}' failed to start.`,
-      );
-    }
-
-    await sleep(SESSION_POLL_INTERVAL_MS);
+    await sleep(Math.min(SESSION_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
   }
-
   throw new SurfaceError("transport_error", `Timed out waiting for session '${sessionId}' to start.`, {
     retryable: true,
   });
+}
+
+function createWarmSessionRecord(
+  context: RuntimeContext,
+  account: MailAccount,
+  options: { idleTimeoutSeconds: number; maxAgeSeconds: number },
+): StoredSessionRecord {
+  const sessionId = makeSessionId();
+  return context.db.createSession({
+    session_id: sessionId,
+    account_id: account.account_id,
+    provider: account.provider,
+    transport: account.transport,
+    socket_path: sessionSocketPath(context, sessionId),
+    auth_token: makeSessionToken(),
+    idle_timeout_seconds: options.idleTimeoutSeconds,
+    max_age_seconds: options.maxAgeSeconds,
+  });
+}
+
+function spawnWarmSession(context: RuntimeContext, record: StoredSessionRecord): void {
+  const daemon = sessionDaemonPath();
+  const child = spawn(daemon.command, [
+    ...daemon.args,
+    "--session-id", record.session_id,
+    "--account-id", record.account_id,
+    "--config-path", context.configPath,
+    "--socket-path", record.socket_path,
+    "--auth-token", record.auth_token,
+    "--idle-timeout-seconds", String(record.idle_timeout_seconds),
+    "--max-age-seconds", String(record.max_age_seconds),
+  ], { detached: true, stdio: "ignore", env: process.env });
+  child.on("error", (error) => {
+    context.db.markSessionClosed(record.session_id, "failed", { errorDetail: error.message, pid: null });
+  });
+  child.unref();
+  context.db.updateSessionProcessInfo(record.session_id, child.pid ?? null);
+}
+
+async function failOwnedStartup(context: RuntimeContext, sessionId: string, error: unknown, ownedPid?: number | null): Promise<void> {
+  const record = context.db.getSession(sessionId);
+  const pid = ownedPid ?? record?.pid;
+  if (pid && isProcessAlive(pid)) {
+    // Signal only the owned detached daemon group; Playwright handles browser shutdown on SIGTERM.
+    const target = process.platform === "win32" ? pid : -pid;
+    try { process.kill(target, "SIGTERM"); } catch { /* Already exited. */ }
+    const deadline = Date.now() + 2_000;
+    while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
+    if (isProcessAlive(pid)) {
+      try { process.kill(target, "SIGKILL"); } catch { /* Already exited. */ }
+    }
+  }
+  if (record && existsSync(record.socket_path)) rmSync(record.socket_path, { force: true });
+  context.db.markSessionClosed(sessionId, "failed", {
+    errorDetail: error instanceof Error ? error.message : String(error), pid: null,
+  });
+}
+
+async function finishOwnedStartup(context: RuntimeContext, record: StoredSessionRecord): Promise<StoredSessionRecord> {
+  try {
+    return await waitForSessionReady(context, record.session_id);
+  } catch (error) {
+    await failOwnedStartup(context, record.session_id, error, record.pid);
+    throw error;
+  }
 }
 
 export async function startWarmSession(
@@ -180,51 +313,83 @@ export async function startWarmSession(
 ): Promise<StoredSessionRecord> {
   assertWarmSessionSupported(account);
 
-  const sessionId = makeSessionId();
-  const socketPath = sessionSocketPath(context, sessionId);
-  const authToken = makeSessionToken();
-  const record = context.db.createSession({
-    session_id: sessionId,
-    account_id: account.account_id,
-    provider: account.provider,
-    transport: account.transport,
-    socket_path: socketPath,
-    auth_token: authToken,
-    idle_timeout_seconds: options.idleTimeoutSeconds,
-    max_age_seconds: options.maxAgeSeconds,
-  });
-
-  const daemon = sessionDaemonPath();
-  const child = spawn(
-    daemon.command,
-    [
-      ...daemon.args,
-      "--session-id",
-      sessionId,
-      "--account-id",
-      account.account_id,
-      "--config-path",
-      context.configPath,
-      "--socket-path",
-      socketPath,
-      "--auth-token",
-      authToken,
-      "--idle-timeout-seconds",
-      String(options.idleTimeoutSeconds),
-      "--max-age-seconds",
-      String(options.maxAgeSeconds),
-    ],
-    {
-      detached: true,
-      stdio: "ignore",
-      env: process.env,
-    },
-  );
-  child.unref();
-  context.db.updateSessionProcessInfo(sessionId, child.pid ?? null);
-
-  return waitForSessionReady(context, record.session_id);
+  const record = context.db.transaction(() => {
+    const starting = createWarmSessionRecord(context, account, options);
+    spawnWarmSession(context, starting);
+    return context.db.getSession(starting.session_id)!;
+  }, "immediate");
+  return finishOwnedStartup(context, record);
 }
+
+interface DefaultSessionLifecycle {
+  spawn: typeof spawnWarmSession;
+  wait: typeof waitForSessionReady;
+  finishOwned: typeof finishOwnedStartup;
+  compatible: typeof sessionHasCompatibleConfig;
+}
+const defaultSessionLifecycle: DefaultSessionLifecycle = {
+  spawn: spawnWarmSession, wait: waitForSessionReady, finishOwned: finishOwnedStartup, compatible: sessionHasCompatibleConfig,
+};
+
+async function getOrStartWarmSession(
+  context: AccountRuntimeContext,
+  lifecycle: DefaultSessionLifecycle = defaultSessionLifecycle,
+  excludedIds: Set<string> = new Set(),
+): Promise<StoredSessionRecord> {
+  const reservation = context.db.transaction(() => {
+    for (const record of context.db.listSessions()) {
+      if (excludedIds.has(record.session_id) || record.account_id !== context.account.account_id || record.provider !== context.account.provider ||
+          record.transport !== context.account.transport || !["running", "starting"].includes(record.status)) continue;
+      const expired = sessionExpiry(record);
+      const staleStartup = record.status === "starting" &&
+        Date.now() >= parseTimestamp(record.created_at) + sessionStartupTimeoutMs(context);
+      if (expired.expired || staleStartup || !isProcessAlive(record.pid) ||
+          (record.status === "running" && !existsSync(record.socket_path))) {
+        context.db.markSessionClosed(record.session_id, expired.expired ? "expired" : "failed", {
+          errorDetail: expired.expired ? `Session expired due to ${expired.reason}.` : "Session daemon is unavailable or startup timed out.",
+        });
+        continue;
+      }
+      return { record, owned: false };
+    }
+    const record = createWarmSessionRecord(context, context.account, {
+      idleTimeoutSeconds: DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
+      maxAgeSeconds: DEFAULT_SESSION_MAX_AGE_SECONDS,
+    });
+    // Spawn and persist pid before releasing the short reservation transaction.
+    lifecycle.spawn(context, record);
+    return { record: context.db.getSession(record.session_id)!, owned: true };
+  }, "immediate");
+
+  if (reservation.owned) return lifecycle.finishOwned(context, reservation.record);
+  try {
+    const ready = await lifecycle.wait(context, reservation.record.session_id);
+    if (await lifecycle.compatible(context, ready)) return ready;
+    // Legacy/incompatible sessions stay available to their explicit owners.
+    excludedIds.add(ready.session_id);
+    return getOrStartWarmSession(context, lifecycle, excludedIds);
+  } catch (error) {
+    // Only a refused/missing health-check connection can select a replacement.
+    // Startup timeouts and provider RPC errors never retry here.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (reservation.record.status !== "running" ||
+        !["ECONNREFUSED", "ENOENT"].includes(code ?? "")) throw error;
+    context.db.markSessionClosed(reservation.record.session_id, "failed", { errorDetail: "Session socket is unreachable." });
+    excludedIds.add(reservation.record.session_id);
+    return getOrStartWarmSession(context, lifecycle, excludedIds);
+  }
+}
+
+export async function resolveReadSession(
+  context: AccountRuntimeContext,
+  explicitSessionId?: string,
+): Promise<string | undefined> {
+  if (explicitSessionId !== undefined) return explicitSessionId;
+  if (!isWarmSessionSupported(context.account)) return undefined;
+  return (await getOrStartWarmSession(context)).session_id;
+}
+
+export const sessionTestHooks = { getOrStartWarmSession, waitForSessionReady, finishOwnedStartup, sessionHasCompatibleConfig };
 
 function validateSessionForAccount(
   context: RuntimeContext,
@@ -265,7 +430,7 @@ function validateSessionForAccount(
   return refreshed;
 }
 
-async function callSession(record: StoredSessionRecord, method: SessionRpcMethod, params: Record<string, unknown>): Promise<unknown> {
+async function callSession(record: StoredSessionRecord, method: SessionRpcMethod, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
   if (!existsSync(record.socket_path)) {
     throw new SurfaceError("session_invalid", `Session socket is missing for '${record.session_id}'.`);
   }
@@ -280,6 +445,11 @@ async function callSession(record: StoredSessionRecord, method: SessionRpcMethod
     const socket = connect(record.socket_path);
     let raw = "";
 
+    let timer: NodeJS.Timeout | undefined;
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => socket.destroy(new SurfaceError("transport_error", `Timed out checking session '${record.session_id}' compatibility.`, { retryable: true })), timeoutMs);
+    }
+    socket.once("close", () => { if (timer) clearTimeout(timer); });
     socket.setEncoding("utf8");
     socket.on("connect", () => {
       socket.write(JSON.stringify(request));

@@ -310,11 +310,20 @@ Example skill install result:
 
 Warm session notes:
 
-- session ids are explicit and opt-in
+- Outlook provider-backed reads obtain/reuse an account-bound warm session automatically when `--session` is absent
+- when a session is used, explicit `--session` is authoritative and fails closed on invalid, mismatched or expired sessions
+- cached `thread get` continues to ignore `--session` until a live refresh is needed
+- `session start` always creates an independent session; `list` and `stop` also expose automatic sessions
+- default expiry is one hour idle / seven days maximum age; expired or unhealthy automatic sessions are replaced
+- automatic reuse requires matching effective runtime settings (including summarizer configuration and inherited credentials); incompatible/legacy sessions remain available explicitly
+- private health checks are bounded to five seconds, bypass the browser queue, and the new daemon protocol does not renew idle expiry
+- startup checks socket readiness for at most `60000 + 2 * provider_timeout_ms` milliseconds (120 seconds by default)
 - v1 warm sessions are supported only for `outlook-web-playwright`
 - v1 session-aware commands are `search`, `fetch-unread`, `sent`, `sync-unread-state`,
   `thread get --refresh`, and `read`
-- `read --mark-read` stays on the stateless path in v1
+- cached thread/read results do not launch a browser solely for a cache hit
+- `read --mark-read` stays on the stateless path in v1; explicit `--session --mark-read` remains invalid
+- provider operation errors are returned without retry; other transports retain their current behavior
 
 Example session start result:
 

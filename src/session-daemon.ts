@@ -14,7 +14,7 @@ import {
 } from "./providers/outlook/adapter.js";
 import { launchOutlookSession, probeOutlookAuth } from "./providers/outlook/session.js";
 import { createAccountRuntimeContext, createRuntimeContext } from "./runtime.js";
-import { sessionExpiry } from "./session.js";
+import { closeEmptySessionProbe, respondToSessionHealthCheck, sessionExpiry } from "./session.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -207,11 +207,16 @@ async function main(): Promise<void> {
 
     server = createServer({ allowHalfOpen: true }, (socket) => {
       let raw = "";
+      socket.on("error", () => socket.destroy());
       socket.setEncoding("utf8");
       socket.on("data", (chunk) => {
         raw += chunk;
       });
       socket.on("end", () => {
+        // Readiness checks connect and close without sending an RPC.
+        if (closeEmptySessionProbe(socket, raw)) return;
+        // Registry/config health is independent of serialized browser operations and never renews TTL.
+        if (respondToSessionHealthCheck(context, args.sessionId, socket, raw)) return;
         inflight = inflight.then(async () => {
           try {
             const request = JSON.parse(raw) as {
@@ -243,9 +248,6 @@ async function main(): Promise<void> {
 
             let result: unknown;
             switch (request.method) {
-              case "ping":
-                result = { session_id: args.sessionId, status: "running" };
-                break;
               case "search":
                 result = await searchOutlookWithSession(
                   account,

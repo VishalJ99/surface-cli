@@ -105,7 +105,10 @@ Use the directories this way:
   when the stable `attachment_id` is unchanged
 
 `downloads/` should not be treated as disposable cache.
-`sessions/` contains disposable local daemon sockets for warm provider sessions.
+`sessions/` contains disposable local daemon sockets for warm provider sessions. Default Outlook live reads
+reuse the existing registry. A short immediate SQLite transaction reserves one account-bound starting
+row for concurrent first reads; it does not change the schema or hold a transaction during browser
+startup/RPC. Cache-only reads do not create sessions. See ADR 0047.
 
 ## Cache Clearing
 

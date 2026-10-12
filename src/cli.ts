@@ -44,6 +44,7 @@ import {
   DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS,
   DEFAULT_SESSION_MAX_AGE_SECONDS,
   listWarmSessions,
+  resolveReadSession,
   sessionFetchUnread,
   sessionReadMessage,
   sessionRefreshThread,
@@ -852,8 +853,9 @@ mailCommand
           );
         }
 
-        const threads = options.session
-          ? await sessionSearch(context, options.session, query)
+        const sessionId = await resolveReadSession(context, options.session);
+        const threads = sessionId !== undefined
+          ? await sessionSearch(context, sessionId, query)
           : await resolveProviderAdapter(context.account).search(context.account, query, context);
 
         writeJson({
@@ -882,8 +884,9 @@ mailCommand
           limit: options.limit ?? context.config.defaultResultLimit,
           unread_only: true as const,
         };
-        const threads = options.session
-          ? await sessionFetchUnread(context, options.session, query)
+        const sessionId = await resolveReadSession(context, options.session);
+        const threads = sessionId !== undefined
+          ? await sessionFetchUnread(context, sessionId, query)
           : await resolveProviderAdapter(context.account).fetchUnread(context.account, query, context);
 
         writeJson({
@@ -937,8 +940,9 @@ mailCommand
           ...(recipient ? { recipient } : {}),
           limit: options.limit ?? DEFAULT_SENT_LIMIT,
         };
-        const messages = options.session
-          ? await sessionSent(context, options.session, query)
+        const sessionId = await resolveReadSession(context, options.session);
+        const messages = sessionId !== undefined
+          ? await sessionSent(context, sessionId, query)
           : await resolveProviderAdapter(context.account).fetchSent(context.account, query, context);
 
         writeJson({
@@ -990,8 +994,9 @@ mailCommand
         const adapter = resolveProviderAdapter(context.account);
         let cacheStatus: "hit" | "refreshed" = "hit";
         if (Boolean(options.refresh) || !threadHasReadableCache(context.db, threadRef)) {
-          if (options.session) {
-            await sessionRefreshThread(context, options.session, threadRef);
+          const sessionId = await resolveReadSession(context, options.session);
+          if (sessionId !== undefined) {
+            await sessionRefreshThread(context, sessionId, threadRef);
           } else {
             await adapter.refreshThread(context.account, threadRef, context);
           }
@@ -1042,9 +1047,16 @@ mailCommand
         if (Boolean(options.markRead)) {
           await adapter.markRead(context.account, [messageRef], context);
         }
+        const stored = context.db.getStoredMessage(messageRef);
+        const needsLiveRead = Boolean(options.refresh) || !stored?.body_cache_path || !existsSync(stored.body_cache_path);
+        const sessionId = options.session !== undefined
+          ? options.session
+          : !Boolean(options.markRead) && needsLiveRead
+            ? await resolveReadSession(context)
+            : undefined;
         writeJson(
-          options.session
-            ? await sessionReadMessage(context, options.session, messageRef, Boolean(options.refresh))
+          sessionId !== undefined
+            ? await sessionReadMessage(context, sessionId, messageRef, Boolean(options.refresh))
             : await adapter.readMessage(context.account, messageRef, Boolean(options.refresh), context),
         );
       },

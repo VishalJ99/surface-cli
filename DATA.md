@@ -1,3 +1,5 @@
 - `.env` — Local-only dotenv file for Surface runtime overrides such as compatibility remembered-auth account names, auth-check cadence, and `SURFACE_CACHE_DIR`; ignored by git.
 - `.surface-cli/` — Optional project-local Surface state root when `SURFACE_CACHE_DIR` points inside the checkout; contains SQLite state, auth material, cache, downloads, remembered-auth state, and auth-check state; ignored by git.
 - `outputs/` — Local-only generated reports and benchmark artifacts. May contain private mailbox content; ignored by git and not suitable for repository commits.
+
+- `src/session.test.ts` — Synthetic account/session/socket fixtures for PER-569 default Outlook read dispatch, concurrent startup, readiness, expiry and failure regression tests; no live mailbox data.

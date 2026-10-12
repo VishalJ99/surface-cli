@@ -182,7 +182,7 @@ Capabilities are account/transport-level. Message applicability should be derive
 ## Warm Session Rules
 
 - transports may optionally support explicit warm session ids for repeated live operations
-- the default adapter behavior remains stateless when no session id is provided
+- the CLI automatically obtains/reuses a warm session for supported Outlook live reads when no session id is provided; direct adapters and other transports retain their current behavior
 - v1 warm session support is intentionally transport-specific rather than universal
 - read-path warm sessions must remain bound to one account/provider/transport and fail closed on mismatch or expiry
 

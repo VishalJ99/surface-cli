@@ -201,6 +201,11 @@ the user-requested destination.
 
 ### Warm Sessions
 
+Supported Outlook live reads automatically reuse an account-bound warm session. No `--session`
+flag is needed. Cached reads do not start a browser. Sessions expire after one hour idle or seven
+days total by default; the next live read starts a replacement. Use these commands to inspect or
+stop sessions, or start an independent session with an explicit lifecycle:
+
 ```bash
 surface session start --account uni
 surface session list
@@ -217,10 +222,9 @@ Read-only commands may be run in parallel. Live probes passed for:
 - two separate Outlook warm sessions searched at the same time
 - two searches sharing one Outlook warm session
 
-For Outlook, keep concurrency modest because each cold command or warm session uses browser
-resources. If planning multiple concurrent Outlook operations, prefer one warm session per
-parallel worker. Reusing the same `--session` concurrently works in the tested case but can be
-slower due to contention.
+For Outlook, requests sharing a warm session run sequentially, including automatic reuse for the
+same account. For concurrent execution, start a separate session per worker and pass its
+`--session` explicitly. Keep concurrency modest because each session uses browser resources.
 
 ### Read One Thread
 
@@ -282,7 +286,7 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
    messages as tone/context. When replying in an existing thread, prefer
    `surface mail sent --account <account> --thread <thread_ref> --limit 3`; use recipient matching
    as fallback if the thread has no sent examples.
-6. If you expect several live Outlook reads in a row, start a warm session first and reuse its `session_id`.
+6. Outlook live reads reuse a warm session automatically; use explicit sessions for independent parallel workers.
 7. For a thread watch, use `surface mail thread get <thread_ref> --refresh` and compare the newest
    message state against the stored prior observation before notifying.
 8. For a topic watch, start with `search` to set the baseline, then use `fetch-unread` for new
@@ -298,7 +302,11 @@ surface mail rsvp msg_01... --response accept   # Gmail/Outlook only; IMAP retur
 - Surface outputs JSON on stdout. Parse it instead of scraping terminal text.
 - Use `message_ref` and `thread_ref` for follow-up commands.
 - `search` accepts structured filters for sender, subject, mailbox, and labels in addition to raw `--text`.
-- `session start` is the explicit opt-in path for warm Outlook read sessions. In v1, `--session` is supported on `search`, `fetch-unread`, `thread get --refresh`, and `read`.
+- Outlook `search`, `fetch-unread`, `sent`, `sync-unread-state`, live `thread get`, and live `read`
+  reuse warm sessions automatically. When a session is used, explicit `--session` selects that exact
+  session and fails closed on invalid, expired, or mismatched ids. `session start` creates an independent session.
+- Compose/send and `read --mark-read` do not use the warm read session; `read --mark-read --session`
+  remains unsupported.
 - `thread get --refresh` is the thread-level live refresh path for automations that watch a specific conversation.
 - `read` is cache-first by default. Use `--refresh` when you need live provider state.
 - the first session-backed Outlook query still pays mailbox setup cost; the main win is faster follow-on live reads in the same mailbox session

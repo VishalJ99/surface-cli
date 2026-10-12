@@ -5,7 +5,7 @@ import type {
 } from "../contracts/mail.js";
 import { resolveProviderAdapter } from "../providers/index.js";
 import type { AccountRuntimeContext } from "../runtime.js";
-import { sessionFetchUnread } from "../session.js";
+import { resolveReadSession, sessionFetchUnread } from "../session.js";
 import type { StoredUnreadMessageCandidate } from "../state/database.js";
 import { toPublicThread } from "./public-mail.js";
 import { nowIsoUtc } from "./time.js";
@@ -96,11 +96,12 @@ export async function syncUnreadState(
   context: AccountRuntimeContext,
   options: SyncUnreadStateOptions,
 ): Promise<SyncUnreadStateResultEnvelope> {
+  const sessionId = await resolveReadSession(context, options.session);
   return syncUnreadStateWithFetcher(
     context,
     options,
-    options.session
-      ? (query) => sessionFetchUnread(context, options.session!, query)
+    sessionId !== undefined
+      ? (query) => sessionFetchUnread(context, sessionId, query)
       : (query) => resolveProviderAdapter(context.account).fetchUnread(context.account, query, context),
   );
 }

@@ -745,10 +745,11 @@ export class SurfaceDatabase {
     return existing;
   }
 
-  transaction<T>(work: () => T): T {
-    return (this.connection as unknown as {
-      transaction: <F extends () => T>(fn: F) => F;
-    }).transaction(work)();
+  transaction<T>(work: () => T, mode?: "immediate"): T {
+    const transaction = (this.connection as unknown as {
+      transaction: (fn: () => T) => (() => T) & { immediate: () => T };
+    }).transaction(work);
+    return mode === "immediate" ? transaction.immediate() : transaction();
   }
 
   findEntityRefByProviderKey(

@@ -288,8 +288,9 @@ surface mail read msg_01...
 surface mail read msg_01... --refresh
 ```
 
-For Outlook-heavy sessions, start a warm browser session and pass its `session_id`
-to follow-up read commands:
+Outlook live reads automatically reuse an account-bound warm browser session (one hour idle /
+seven days maximum age). Cached reads do not start a browser. Use explicit sessions when you need
+an independent lifecycle; an explicit `session_id` is authoritative and fails closed:
 
 ```bash
 surface session start --account uni
