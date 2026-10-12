@@ -1217,23 +1217,19 @@ async function finalizeCurrentCompose(
   return "sent";
 }
 
-async function clickReplyAllAction(page: Page): Promise<void> {
-  const primaryButton = page.getByRole("button", { name: /reply all/i }).first();
-  if ((await primaryButton.count()) > 0) {
+export async function clickReplyAllAction(page: Page): Promise<void> {
+  // Outlook native buttons may expose role="menuitem", so a role=button lookup misses them.
+  const primaryButton = page.locator('button[aria-label="Reply all"]:visible').first();
+  if (await primaryButton.count()) {
     await primaryButton.click();
-    return;
+  } else {
+    await page.locator('button[aria-label="More items"]:visible').last().click();
+    const menuAction = page.getByRole("menu").getByRole("menuitem", { name: /^reply all$/i });
+    await menuAction.click();
   }
 
-  await page.locator('button[aria-label="More items"]').last().click();
-  await page.waitForTimeout(600);
-  const fallback = page.getByRole("menuitem", { name: /reply all/i }).first();
-  await fallback.waitFor({ timeout: 10_000 });
-  await fallback.click({ force: true });
-  await page.waitForTimeout(800);
-  const inlineActivator = page.locator('div[aria-label="Reply all"]').last();
-  if ((await inlineActivator.count()) > 0) {
-    await inlineActivator.click({ force: true });
-  }
+  // Do not click the hidden overflow copy after the action has opened compose.
+  await page.locator('[role="textbox"][aria-label="Message body"]:visible').first().waitFor({ timeout: 15_000 });
 }
 
 async function findResolvedSearchTarget(
