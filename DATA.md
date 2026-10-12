@@ -3,3 +3,4 @@
 - `outputs/` — Local-only generated reports and benchmark artifacts. May contain private mailbox content; ignored by git and not suitable for repository commits.
 
 - `src/session.test.ts` — Synthetic account/session/socket fixtures for PER-569 default Outlook read dispatch, concurrent startup, readiness, expiry and failure regression tests; no live mailbox data.
+- `src/providers/outlook/adapter.compose.test.ts` — Self-contained local Playwright fixture for Outlook recipient-picker and compose-field behavior; uses synthetic addresses and no mailbox state.
