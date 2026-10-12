@@ -125,6 +125,11 @@ username, and password source flags. `imap-smtp` may infer server settings from 
 domain preset when no server flags are supplied. Providers must store durable auth material under
 the account auth directory, not in the repo or local policy config.
 
+`surface auth check` is a CLI/runtime layer over `authStatus`. Providers do not need a separate
+scheduled-auth hook in v1. A status other than `authenticated` is treated as stale and should give
+automation a clear `login_command`; provider login remains the normal explicit auth flow and may
+require user consent or provider-specific secret input.
+
 `SendMessageInput.attachments` carries files resolved by the CLI for direct `surface mail send`
 only. Each entry includes the local path for transports that need a browser upload, normalized
 filename/MIME/size metadata, and base64 bytes for API or SMTP MIME composition. Providers must keep

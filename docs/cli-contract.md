@@ -23,8 +23,9 @@ Define the public Surface CLI commands and their machine-readable JSON output.
 - `surface account identity show <account>`
 - `surface account identity set <account> [--email <email>] [--name <name>] [--email-alias <email>]... [--name-alias <name>]... [--clear-email-aliases] [--clear-name-aliases]`
 - `surface account remove <account>`
-- `surface auth login <account> [--remote-host <host>]`
+- `surface auth login <account> [--remember-me] [--remote-host <host>]`
 - `surface auth status [account]`
+- `surface auth check [account] [--interval <seconds>] [--due-only] [--remembered-only] [--login-if-stale]`
 - `surface auth logout <account>`
 - `surface skill install <codex|claude-code|all>`
 
@@ -67,6 +68,22 @@ Gmail auth notes:
 
 - `surface auth login <account>` for `gmail-api` uses a loopback OAuth flow and prints the Google
   authorization URL to `stderr`
+- `surface auth login <account> --remember-me` records remembered-auth metadata under the Surface
+  state root as `remembered-auth.json` after a successful login. For backward-compatible
+  repo-local automation, local login also updates the project `.env` marker. It does not write raw
+  provider credentials to `.env` or `remembered-auth.json`; provider auth material remains in
+  Surface auth storage.
+- Remembered-auth state contains:
+  - `accounts`, written as a JSON array of account names
+  - `auth_check_interval_seconds`
+- Compatibility `.env` keys:
+  - `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, written as a JSON array of account names
+  - `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`
+- Surface only loads `SURFACE_CACHE_DIR`, `SURFACE_REMEMBERED_AUTH_ACCOUNTS`, and
+  `SURFACE_AUTH_CHECK_INTERVAL_SECONDS` from project `.env`. Write-safety and summarizer settings
+  must still come from the process environment or `config.toml`.
+- With `--remote-host`, `--remember-me` writes `remembered-auth.json` under the remote Surface state
+  root after remote auth succeeds. It does not require a remote checkout path.
 - Gmail RSVP also depends on Google Calendar scope. After enabling Calendar API for the same Google
   Cloud project, existing Gmail accounts must re-run `surface auth login <account>` once so
   Surface can store a token with Calendar access.
@@ -81,6 +98,8 @@ Gmail auth notes:
 - Remote auth login assumes the named account already exists on the remote host
 - Remote auth login only warns before replacement when the remote account currently reports
   `status = "authenticated"`
+- Remote `--remember-me` uses the same remote Surface root as auth material, so the complete command
+  is `surface auth login <account> --remote-host <host> --remember-me`.
 - Gmail auth resolves desktop OAuth credentials from:
   - `SURFACE_GMAIL_CLIENT_SECRET_FILE`
   - the stored per-account copy under `~/.surface-cli/auth/<account_id>/client_secret.json`
@@ -156,6 +175,103 @@ Example remote auth login result:
     "status": "authenticated",
     "detail": "Authenticated as you@example.com."
   }
+}
+```
+
+Example remote remembered auth login result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "auth-login",
+  "account": "personal",
+  "provider": "gmail",
+  "transport": "gmail-api",
+  "remote_host": "dross",
+  "status": {
+    "status": "authenticated",
+    "detail": "Authenticated as you@example.com."
+  },
+  "remembered_auth": {
+    "state_path": "/Users/example/.surface-cli/remembered-auth.json",
+    "accounts": ["personal"],
+    "auth_check_interval_seconds": 86400,
+    "secret_storage": "Remote Surface auth storage; remembered auth state stores account/check settings only.",
+    "check_command": "ssh dross 'SURFACE_CACHE_DIR=/Users/example/.surface-cli surface auth check --remembered-only --due-only'",
+    "reauth_command": "surface auth login personal --remote-host dross --remember-me"
+  }
+}
+```
+
+Example remembered auth login result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "auth-login",
+  "account": "personal",
+  "provider": "gmail",
+  "transport": "gmail-api",
+  "status": {
+    "status": "authenticated",
+    "detail": "Authenticated as you@example.com."
+  },
+  "remembered_auth": {
+    "state_path": "/Users/example/.surface-cli/remembered-auth.json",
+    "env_path": "/Users/example/surface-cli/.env",
+    "accounts": ["personal"],
+    "auth_check_interval_seconds": 86400,
+    "secret_storage": "Surface auth storage; remembered auth state stores account/check settings only."
+  }
+}
+```
+
+Auth check notes:
+
+- `surface auth check` runs provider auth probes and returns JSON that tells automation whether
+  re-login is required.
+- Without an account, it checks all configured accounts. With `--remembered-only`, it checks only
+  accounts named in `remembered-auth.json` or legacy/project `SURFACE_REMEMBERED_AUTH_ACCOUNTS`.
+- `--due-only` skips provider probes until the recorded `next_check_at` has arrived. This is the
+  intended mode for launchd/cron/OpenClaw timers that may run more often than the provider check
+  interval.
+- `--interval <seconds>` controls the next due time for this run. If omitted, Surface uses
+  `SURFACE_AUTH_CHECK_INTERVAL_SECONDS`, `auth_check_interval_seconds`, or the built-in daily
+  default.
+- `--login-if-stale` invokes the provider's normal `auth login` flow after a stale check. It cannot
+  silently complete OAuth consent, Microsoft sign-in/2FA, or missing IMAP password input.
+- `auth check` records local check state under the Surface state root as `auth-checks.json`.
+
+Example auth check result:
+
+```json
+{
+  "schema_version": "1",
+  "command": "auth-check",
+  "interval_seconds": 86400,
+  "due_only": true,
+  "remembered_only": true,
+  "login_if_stale": false,
+  "accounts": [
+    {
+      "account": "personal",
+      "provider": "gmail",
+      "transport": "gmail-api",
+      "remembered": true,
+      "checked": true,
+      "due": true,
+      "stale": false,
+      "reauth_required": false,
+      "status": {
+        "status": "authenticated",
+        "detail": "Authenticated as you@example.com."
+      },
+      "login_command": "surface auth login personal",
+      "checked_at": "2026-06-15T12:00:00Z",
+      "last_checked_at": null,
+      "next_check_at": "2026-06-16T12:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -247,10 +363,36 @@ Example session start result:
 ### Cache
 
 - `surface cache stats`
-- `surface cache prune`
+- `surface cache prune [--dry-run] [--max-age-seconds <seconds>]`
 - `surface cache clear --account <account>`
 - `surface cache clear --message <message_ref>`
 - `surface cache clear --all`
+
+`surface cache prune` removes only disposable Surface-owned temp artifacts. In v1 this means stale
+Outlook headless browser profile clones named `surface-outlook-*` directly under the OS temp root.
+It must not delete auth data, downloaded attachments, SQLite state, or persistent Outlook profiles
+under `auth/<account_id>/profile`. When `dry_run` is true, `removed` and `removed_bytes` describe
+what would be removed without deleting anything.
+
+Example dry-run output:
+
+```json
+{
+  "schema_version": "1",
+  "command": "cache-prune",
+  "status": "ok",
+  "cache_root": "/Users/alice/.surface-cli",
+  "outlook_temp_profiles": {
+    "scanned": 2,
+    "removed": 1,
+    "skipped_active": 0,
+    "skipped_young": 1,
+    "skipped_error": 0,
+    "removed_bytes": 870000000,
+    "dry_run": true
+  }
+}
+```
 
 ## Naming Decisions
 
