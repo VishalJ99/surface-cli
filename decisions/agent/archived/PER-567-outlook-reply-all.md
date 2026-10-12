@@ -9,3 +9,5 @@ Select the visible native button first. If unavailable, select Reply all inside 
 Validation: Chromium fixtures cover normal button, role=menuitem native button, and scoped overflow fallback with hidden duplicates and delayed composer insertion. Live Outlook on the Mac mini confirmed the role=menuitem native button opens compose on the affected thread.
 
 Release baseline: npm 0.4.3 gitHead 8ec1940b899e94e18c5cc1db9f1ef4781916de4a was reconciled separately in PR #11. Exclude unrelated unpublished changes. ClawHub 0.4.4 SKILL.md equals this baseline; publish CLI and skill as 0.4.5 to avoid the existing skill version. Preserve the local per-548 customized runtime and apply only this fix there.
+
+Independent review accepted the narrow control fix; orchestrator verified its findings against the diff. 51 tests passed, including all three browser fixtures; TypeScript, build, and package dry-run checks passed. Live compose showed the approved body and intended recipient chips. Final delivery verification must inspect the Sent folder/provider state: the existing thread-based sent query can include drafts and is not sufficient proof.
