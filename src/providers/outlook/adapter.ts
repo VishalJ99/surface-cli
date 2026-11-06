@@ -73,6 +73,8 @@ import {
   messageIdentity,
   normalizeOutlookBody,
 } from "./normalize.js";
+import { OutlookComposeReceipt } from "./compose-receipt.js";
+import type { OutlookCapturedSession } from "./extract.js";
 import type { StoredMessageRecord } from "../../state/database.js";
 
 function outlookProfileDir(context: ProviderContext): string {
@@ -694,7 +696,7 @@ async function persistThreads(
     }
 
     return persistedThreads;
-  });
+  }, "immediate");
 }
 
 async function refreshOutlookConversationWithSession(
@@ -1296,8 +1298,8 @@ function buildForwardBody(inputBody: string, stored: StoredMessageRecord): strin
 async function fillComposeBody(page: Page, body: string): Promise<void> {
   const editor = page.locator(COMPOSE_EDITOR);
   await editor.waitFor({ timeout: 15_000 });
-  // Select this editor's contents, not the document or a read-only message body.
-  // One HTML insertion avoids keyboard Enter/list heuristics and replaces old content.
+  // Replace only the visible authored editor; the final provider write replaces
+  // hidden/virtual reply history on the exact saved draft as well.
   await editor.evaluate((element, html) => {
     const editable = element as HTMLElement;
     editable.focus();
@@ -1392,21 +1394,9 @@ async function attachComposeFiles(
     const chooser = await openOutlookAttachmentFileChooser(page, account);
     await chooser.setFiles(attachment.path);
     await acceptOutlookAttachAsCopyIfPrompted(page);
-    try {
-      await page.getByText(attachment.filename).first().waitFor({ timeout: 30_000 });
-    } catch {
-      throw new SurfaceError(
-        "transport_error",
-        `Outlook attachment '${attachment.filename}' did not finish uploading before send.`,
-        { account: account.name },
-      );
-    }
+    // Filename chips are not upload receipts (image tiles may expose no text).
+    // Finalization waits for the exact provider draft and verifies attachment bytes.
   }
-}
-
-async function sendCurrentCompose(page: Page): Promise<void> {
-  await page.locator('button[aria-label="Send"]').first().click();
-  await page.waitForTimeout(4_000);
 }
 
 async function saveCurrentComposeDraft(page: Page): Promise<void> {
@@ -1421,22 +1411,86 @@ async function saveCurrentComposeDraft(page: Page): Promise<void> {
   await page.waitForTimeout(1_000);
 }
 
-async function finalizeCurrentCompose(
-  page: Page,
-  disposition: "send" | "draft",
-): Promise<SendResultEnvelope["status"]> {
-  if (disposition === "draft") {
-    await saveCurrentComposeDraft(page);
-    return "drafted";
-  }
+type ComposeResolution = { thread_ref: string; message_ref: string; stored: StoredMessageRecord | null };
 
-  await sendCurrentCompose(page);
-  return "sent";
+async function persistComposeReceipt(
+  account: MailAccount, context: ProviderContext, session: OutlookSession,
+  captured: OutlookCapturedSession, item: Record<string, any>,
+): Promise<ComposeResolution> {
+  const conversationId = item.ConversationId?.Id;
+  const messageId = item.ItemId?.Id;
+  if (!conversationId || !messageId) throw new SurfaceError("transport_error", "Saved Outlook draft lacks its identity.");
+  const bundle = await fetchConversationBundle(session.context.request, captured, conversationId);
+  const entry = { item: { ...item, UniqueBody: undefined }, nodeMetadata: {
+    parentInternetMessageId: null, hasQuotedText: null, isRootNode: null,
+  } };
+  bundle.entries = bundle.entries.filter((candidate) => (candidate.item.ItemId as any)?.Id !== messageId);
+  bundle.entries.push(entry);
+  const [thread] = await persistThreads(account, context, [normalizeThread(bundle)]);
+  const message = thread?.messages.find((candidate) => candidate.provider_ids?.message_id === messageId);
+  if (!thread || !message) throw new SurfaceError("transport_error", "Could not retain the exact Outlook draft reference.");
+  return { thread_ref: thread.thread_ref, message_ref: message.message_ref,
+    stored: context.db.getStoredMessage(message.message_ref) ?? null };
+}
+
+async function finalizeVerifiedCompose(
+  session: OutlookSession, disposition: "send" | "draft", body: string,
+  attachments: SendMessageInput["attachments"], receipt: OutlookComposeReceipt,
+  account: MailAccount, context: ProviderContext, captured: OutlookCapturedSession,
+): Promise<ComposeResolution> {
+  await session.page.locator(COMPOSE_EDITOR).evaluate((element) => (element as HTMLElement).blur());
+  // Wait for an identified draft and byte-verified uploads before leaving the UI.
+  await receipt.verify(null, attachments);
+  await saveCurrentComposeDraft(session.page);
+  await session.page.goto("about:blank");
+  await session.page.waitForTimeout(1_000);
+  // OWA's virtual editor can append hidden quotations or lose authored text on
+  // serialization. Make the exact saved draft authoritative, with no live editor
+  // remaining to overwrite the full body after this write.
+  await receipt.replaceBody(body);
+  const item = await receipt.verify(body, attachments);
+  const resolved = await persistComposeReceipt(account, context, session, captured, item);
+  if (disposition === "send") {
+    await receipt.sendVerifiedDraft(body, attachments);
+  }
+  return resolved;
+}
+
+async function reportComposeFailure(
+  error: unknown, receipt: OutlookComposeReceipt | undefined, account: MailAccount,
+  context: ProviderContext, session: OutlookSession, captured: OutlookCapturedSession | undefined,
+): Promise<SurfaceError> {
+  let resolved: ComposeResolution | undefined;
+  let savedAsDraft = false;
+  if (receipt && captured) {
+    try {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const item = await receipt.read();
+        if (item) { savedAsDraft = item.IsDraft === true; resolved = await persistComposeReceipt(account, context, session, captured, item); break; }
+        await session.page.waitForTimeout(1_000);
+      }
+    } catch { /* Preserve original failure and explicitly flag unresolved draft identity. */ }
+  }
+  // A send may move the item before recovery reads succeed; keep its already
+  // persisted reference without claiming it remains an unsent draft.
+  if (!resolved && receipt?.ids.size === 1) {
+    const id = [...receipt.ids][0]!;
+    const ref = context.db.findEntityRefByProviderKey("message", account.account_id, `outlook-message:${id}`);
+    const stored = ref ? context.db.getStoredMessage(ref) : undefined;
+    if (ref && stored) resolved = { message_ref: ref, thread_ref: stored.thread_ref, stored };
+  }
+  const cause = error instanceof Error ? error.message : String(error);
+  return new SurfaceError("transport_error", `${cause} ${resolved
+    ? savedAsDraft ? "A draft was retained; inspect error.message_ref before retrying."
+      : "A provider message exists and delivery is uncertain; inspect error.message_ref before retrying."
+    : "A draft may have been saved but could not be resolved; inspect Outlook Drafts before retrying."}`, {
+    account: account.name, messageRef: resolved?.message_ref ?? null, threadRef: resolved?.thread_ref ?? null, retryable: false,
+  });
 }
 
 export async function clickReplyAllAction(page: Page): Promise<void> {
-  // Outlook native buttons may expose role="menuitem", so a role=button lookup misses them.
-  const primaryButton = page.locator('button[aria-label="Reply all"]:visible').first();
+  // Outlook exposes both button and div menuitems; neither tag nor role=button is stable.
+  const primaryButton = page.locator('button[aria-label="Reply all"]:visible, [role="menuitem"][data-overflow-item][aria-label="Reply all"]:visible').first();
   if (await primaryButton.count()) {
     await primaryButton.click();
   } else {
@@ -1446,7 +1500,7 @@ export async function clickReplyAllAction(page: Page): Promise<void> {
   }
 
   // Do not click the hidden overflow copy after the action has opened compose.
-  await page.locator('[role="textbox"][aria-label="Message body"]:visible').first().waitFor({ timeout: 15_000 });
+  await page.locator(COMPOSE_EDITOR).waitFor({ timeout: 15_000 });
 }
 
 async function findResolvedSearchTarget(
@@ -2230,7 +2284,12 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
+    let receipt: OutlookComposeReceipt | undefined;
+    let captured: OutlookCapturedSession | undefined;
+    let verifiedDraft: ComposeResolution | undefined;
     try {
+      captured = await captureOutlookServiceSession(session.context, session.page, { timeoutMs: context.config.providerTimeoutMs });
+      receipt = new OutlookComposeReceipt(session.page, session.context.request, captured);
       await session.page.goto("https://outlook.office.com/mail/", {
         waitUntil: "domcontentloaded",
         timeout: context.config.providerTimeoutMs,
@@ -2245,12 +2304,17 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillComposeBody(session.page, normalizedInput.body);
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       await verifyComposeBody(session.page, normalizedInput.body);
-      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
+      verifiedDraft = await finalizeVerifiedCompose(session, normalizedInput.draft ? "draft" : "send",
+        normalizedInput.body, normalizedInput.attachments, receipt, account, context, captured);
+      status = normalizedInput.draft ? "drafted" : "sent";
+    } catch (error) {
+      throw await reportComposeFailure(error, receipt, account, context, session, captured);
     } finally {
+      receipt?.stop();
       await closeOutlookSession(session);
     }
 
-    const resolved = await findResolvedSearchTarget(account, normalizedInput.subject, context);
+    const resolved = normalizedInput.draft && verifiedDraft ? verifiedDraft : await findResolvedSearchTarget(account, normalizedInput.subject, context);
     return buildSendEnvelope(
       account,
       "send",
@@ -2288,7 +2352,12 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
+    let receipt: OutlookComposeReceipt | undefined;
+    let captured: OutlookCapturedSession | undefined;
+    let verifiedDraft: ComposeResolution | undefined;
     try {
+      captured = await captureOutlookServiceSession(session.context, session.page, { timeoutMs: context.config.providerTimeoutMs });
+      receipt = new OutlookComposeReceipt(session.page, session.context.request, captured);
       await openConversationForAction(
         session.page,
         target.locator,
@@ -2301,13 +2370,18 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillComposeBody(session.page, normalizedInput.body);
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       await verifyComposeBody(session.page, normalizedInput.body);
-      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
+      verifiedDraft = await finalizeVerifiedCompose(session, normalizedInput.draft ? "draft" : "send",
+        normalizedInput.body, normalizedInput.attachments, receipt, account, context, captured);
+      status = normalizedInput.draft ? "drafted" : "sent";
+    } catch (error) {
+      throw await reportComposeFailure(error, receipt, account, context, session, captured);
     } finally {
+      receipt?.stop();
       await closeOutlookSession(session);
     }
 
-    await refreshOutlookConversation(account, target.locator.conversation_id, context);
-    const latest = latestStoredThreadMessage(target.stored.thread_ref, context);
+    if (!normalizedInput.draft) await refreshOutlookConversation(account, target.locator.conversation_id, context);
+    const latest = normalizedInput.draft && verifiedDraft ? verifiedDraft : latestStoredThreadMessage(target.stored.thread_ref, context);
     const subject = latest.stored?.subject ?? target.stored.subject ?? "";
     return buildSendEnvelope(
       account,
@@ -2346,7 +2420,12 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
+    let receipt: OutlookComposeReceipt | undefined;
+    let captured: OutlookCapturedSession | undefined;
+    let verifiedDraft: ComposeResolution | undefined;
     try {
+      captured = await captureOutlookServiceSession(session.context, session.page, { timeoutMs: context.config.providerTimeoutMs });
+      receipt = new OutlookComposeReceipt(session.page, session.context.request, captured);
       await openConversationForAction(
         session.page,
         target.locator,
@@ -2359,13 +2438,18 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillComposeBody(session.page, normalizedInput.body);
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
       await verifyComposeBody(session.page, normalizedInput.body);
-      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
+      verifiedDraft = await finalizeVerifiedCompose(session, normalizedInput.draft ? "draft" : "send",
+        normalizedInput.body, normalizedInput.attachments, receipt, account, context, captured);
+      status = normalizedInput.draft ? "drafted" : "sent";
+    } catch (error) {
+      throw await reportComposeFailure(error, receipt, account, context, session, captured);
     } finally {
+      receipt?.stop();
       await closeOutlookSession(session);
     }
 
-    await refreshOutlookConversation(account, target.locator.conversation_id, context);
-    const latest = latestStoredThreadMessage(target.stored.thread_ref, context);
+    if (!normalizedInput.draft) await refreshOutlookConversation(account, target.locator.conversation_id, context);
+    const latest = normalizedInput.draft && verifiedDraft ? verifiedDraft : latestStoredThreadMessage(target.stored.thread_ref, context);
     const subject = latest.stored?.subject ?? target.stored.subject ?? "";
     return buildSendEnvelope(
       account,
@@ -2413,7 +2497,12 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
     let status: SendResultEnvelope["status"] = "sent";
     const profileDir = outlookProfileDir(context);
     const session = await launchOutlookSession(profileDir, { headless: true });
+    let receipt: OutlookComposeReceipt | undefined;
+    let captured: OutlookCapturedSession | undefined;
+    let verifiedDraft: ComposeResolution | undefined;
     try {
+      captured = await captureOutlookServiceSession(session.context, session.page, { timeoutMs: context.config.providerTimeoutMs });
+      receipt = new OutlookComposeReceipt(session.page, session.context.request, captured);
       await openConversationForAction(
         session.page,
         target.locator,
@@ -2427,12 +2516,17 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillComposeBody(session.page, normalizedInput.body);
       forwardedSubject = await session.page.locator('input[aria-label="Subject"]').inputValue();
       await verifyComposeBody(session.page, normalizedInput.body);
-      status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
+      verifiedDraft = await finalizeVerifiedCompose(session, normalizedInput.draft ? "draft" : "send",
+        normalizedInput.body, [], receipt, account, context, captured);
+      status = normalizedInput.draft ? "drafted" : "sent";
+    } catch (error) {
+      throw await reportComposeFailure(error, receipt, account, context, session, captured);
     } finally {
+      receipt?.stop();
       await closeOutlookSession(session);
     }
 
-    const resolved = await findResolvedSearchTarget(account, forwardedSubject, context);
+    const resolved = normalizedInput.draft && verifiedDraft ? verifiedDraft : await findResolvedSearchTarget(account, forwardedSubject, context);
     return buildSendEnvelope(
       account,
       "forward",

@@ -177,6 +177,7 @@ function isProcessAlive(pid: number | null): boolean {
 export function sessionConfigFingerprint(context: RuntimeContext, env: NodeJS.ProcessEnv = process.env): string {
   // Hash effective settings and inherited summarizer credentials, never return raw secrets.
   return createHash("sha256").update(JSON.stringify({
+    outlookReadRevision: "full-draft-body-v1",
     config: context.config,
     openRouterKey: env.OPENROUTER_API_KEY ?? null,
     openClawAgent: env.SURFACE_OPENCLAW_AGENT ?? "main",

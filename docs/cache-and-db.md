@@ -141,3 +141,12 @@ required before every signal. Dry runs never signal. See ADR 0048.
 
 See also `docs/m1-checklist.md` and `docs/config.md` for the remaining M1 decisions that
 must be frozen before implementation begins.
+
+### Outlook draft body hydration
+
+Conversation fragments are not authoritative for draft bodies. Live Outlook refreshes
+hydrate `IsDraft` entries with full `GetItem` properties before writing the cache.
+Compose receipts persist the exact provider draft ID, and Outlook persistence uses an
+immediate SQLite transaction to avoid concurrent reader/writer lock upgrades. Default
+warm-session compatibility includes the full-draft-reader revision so older daemons
+cannot silently restore sparse bodies after a verified compose.

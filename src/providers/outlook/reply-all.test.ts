@@ -5,7 +5,7 @@ import { clickReplyAllAction } from "./adapter.js";
 
 const executablePath = process.env.SURFACE_CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-for (const mode of ["button", "menuitem-button", "overflow"] as const) {
+for (const mode of ["button", "menuitem-button", "ribbon-div", "overflow"] as const) {
   test(`reply-all opens one composer through ${mode} with hidden duplicates`, async () => {
     const browser = await chromium.launch({ executablePath, headless: true });
     try {
@@ -16,7 +16,7 @@ for (const mode of ["button", "menuitem-button", "overflow"] as const) {
           <div role="menuitem" aria-label="Reply all" onclick="window.wrong = true">Unrelated toolbar action</div>
           <button aria-label="More items" onclick="document.querySelector('[role=menu]').hidden = false">More</button>
           <div role="menu" hidden><div role="menuitem" aria-label="Reply all" onclick="compose()">Reply all</div></div>
-        ` : `<button aria-label="Reply all" role="${mode === "button" ? "button" : "menuitem"}" onclick="compose()">Reply all</button>`}
+        ` : mode === "ribbon-div" ? `<div role="menuitem" data-overflow-item aria-label="Reply all" onclick="compose()">Reply all</div>` : `<button aria-label="Reply all" role="${mode === "button" ? "button" : "menuitem"}" onclick="compose()">Reply all</button>`}
         <div aria-label="Reply all" role="menuitem" style="display:none" onclick="window.wrong = true">Hidden overflow copy</div>
         <script>
           window.calls = 0;

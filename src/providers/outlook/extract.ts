@@ -510,6 +510,36 @@ function buildOwaHeaders(baseHeaders: Record<string, string>, action: string): R
   };
 }
 
+// Conversation fragments can omit draft bodies and recipients; inspect the full item.
+export async function fetchOutlookItem(
+  requestContext: APIRequestContext,
+  session: OutlookCapturedSession,
+  messageId: string,
+): Promise<Record<string, unknown>> {
+  const response = await requestContext.post(`${session.serviceUrl}?action=GetItem&app=Mail`, {
+    headers: buildOwaHeaders(session.headers, "GetItem"),
+    data: {
+      __type: "GetItemJsonRequest:#Exchange",
+      Header: { __type: "JsonRequestHeaders:#Exchange", RequestServerVersion: "V2017_08_18" },
+      Body: {
+        __type: "GetItemRequest:#Exchange",
+        ItemShape: { __type: "ItemResponseShape:#Exchange", BaseShape: "AllProperties", BodyType: "HTML" },
+        ItemIds: [{ __type: "ItemId:#Exchange", Id: messageId }],
+      },
+    },
+    timeout: 15_000,
+  });
+  try {
+    if (!response.ok()) throw new Error(`Outlook GetItem failed: HTTP ${response.status()}.`);
+    const result = (await response.json())?.Body?.ResponseMessages?.Items?.[0];
+    const item = result?.Items?.[0];
+    if (result?.ResponseClass !== "Success" || !item || item.ItemId?.Id !== messageId) {
+      throw new Error("Outlook GetItem did not return the requested message.");
+    }
+    return item;
+  } finally { await response.dispose(); }
+}
+
 export async function fetchConversationBundle(
   requestContext: APIRequestContext,
   session: OutlookCapturedSession,
@@ -542,7 +572,12 @@ export async function fetchConversationBundle(
       };
       const items = (node.Items ?? []) as Array<Record<string, unknown>>;
       for (const item of items) {
-        entries.push({ item, nodeMetadata });
+        if (item.IsDraft === true && typeof (item.ItemId as { Id?: string })?.Id === "string") {
+          const full = await fetchOutlookItem(requestContext, session, (item.ItemId as { Id: string }).Id);
+          entries.push({ item: { ...item, ...full, UniqueBody: undefined }, nodeMetadata });
+        } else {
+          entries.push({ item, nodeMetadata });
+        }
       }
     }
 

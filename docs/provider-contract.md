@@ -256,3 +256,15 @@ These locators are internal storage concerns and should not be exposed in the pu
 
 - preferred fixture strategy for browser-driven Outlook flows
 - draft lifecycle commands such as list/update/send-existing-discard
+
+### Outlook persisted-compose verification
+
+Outlook compose/reply/reply-all/forward close the editor, write the entire intended
+body to the exact autosaved draft ID, then verify it using a
+full provider read, including complete normalized body equality and attachment byte
+equality. Sending uses that verified draft by ID; the UI does not reserialize it.
+Draft success returns that exact ref; empty/sparse provider bodies cannot
+pass verification. Live draft reads hydrate full item properties rather than relying
+on conversation fragments. On a failed compose, inspect error.message_ref and
+error.thread_ref for a retained draft before retrying. Such failures are not retryable;
+when refs cannot be recovered the error explicitly warns that a draft may exist.
