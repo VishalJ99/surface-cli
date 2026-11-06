@@ -2,6 +2,9 @@ import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { simpleParser } from "mailparser";
+
+import { assertComposeBody } from "../../lib/compose-body.js";
 import type { MailAccount } from "../../contracts/account.js";
 import type {
   ArchiveResultEnvelope,
@@ -53,7 +56,8 @@ import {
   modifyGmailMessage,
   modifyGmailThread,
   patchGoogleCalendarEvent,
-  sendGmailRawMessage,
+  sendGmailDraft,
+  getGmailDraftRaw,
   type GoogleCalendarEventRecord,
   type GmailMessageReference,
   type GmailThreadRecord,
@@ -1377,25 +1381,19 @@ async function sendOrDraftGmailMessage(
     draft: boolean;
   },
 ): Promise<{ status: SendResultEnvelope["status"]; refs: { thread_ref: string | null; message_ref: string | null } }> {
-  if (payload.draft) {
-    const draft = await createGmailDraft(account, context, {
-      raw: payload.raw,
-      threadId: payload.threadId ?? null,
-    });
-    return {
-      status: "drafted",
-      refs: await refreshRefsFromGmailResponse(account, context, draft.message ?? {}),
-    };
-  }
-
-  const message = await sendGmailRawMessage(account, context, {
-    raw: payload.raw,
-    threadId: payload.threadId ?? null,
+  const draft = await createGmailDraft(account, context, {
+    raw: payload.raw, threadId: payload.threadId ?? null,
   });
-  return {
-    status: "sent",
-    refs: await refreshRefsFromGmailResponse(account, context, message),
-  };
+  if (!draft.id) throw new SurfaceError("transport_error", "Gmail did not return a draft id.");
+  const expected = await simpleParser(Buffer.from(payload.raw, "base64url"));
+  const actual = await simpleParser(Buffer.from(await getGmailDraftRaw(account, context, draft.id), "base64url"));
+  assertComposeBody(actual.text ?? "", expected.text ?? "");
+  if (payload.draft) {
+    return { status: "drafted", refs: await refreshRefsFromGmailResponse(account, context, draft.message ?? {}) };
+  }
+  // Send the same provider draft that was read back, not a second copy of the MIME.
+  const message = await sendGmailDraft(account, context, draft.id);
+  return { status: "sent", refs: await refreshRefsFromGmailResponse(account, context, message) };
 }
 
 export class GmailApiAdapter implements MailProviderAdapter {

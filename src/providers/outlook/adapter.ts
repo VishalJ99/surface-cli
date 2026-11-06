@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { Locator, Page } from "playwright-core";
 
+import { assertComposeBody, composeBodyHtml, normalizeComposeBody } from "../../lib/compose-body.js";
 import type { MailAccount } from "../../contracts/account.js";
 import type {
   ArchiveResultEnvelope,
@@ -1241,13 +1242,76 @@ async function fillRecipientField(page: Page, label: "To" | "Cc" | "Bcc", recipi
   }
 }
 
-async function fillComposeBody(page: Page, body: string): Promise<void> {
-  const editor = page.locator('[role="textbox"][aria-label="Message body"]').first();
-  await editor.waitFor({ timeout: 15_000 });
-  await editor.click();
-  if (body.trim()) {
-    await editor.type(body);
+const COMPOSE_EDITOR = '[role="textbox"][aria-label="Message body"][contenteditable="true"]:visible';
+
+async function verifyComposeBody(page: Page, body: string): Promise<void> {
+  const editor = page.locator(COMPOSE_EDITOR);
+  if (await editor.count() !== 1) {
+    throw new SurfaceError("transport_error", "Expected exactly one editable Outlook compose body.");
   }
+  assertComposeBody(await editor.innerText(), body);
+  if (await editor.locator("ol, ul").count()) {
+    throw new SurfaceError("transport_error", "Outlook converted plain text into a list; refusing to send.");
+  }
+}
+
+function quoteLines(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function buildReplyBody(inputBody: string, stored: StoredMessageRecord): string {
+  const parsed = parseStoredMessage(stored);
+  const originalBody = parsed.body.text.trim();
+  const originalFrom = parsed.envelope.from?.email ?? parsed.envelope.from?.name ?? "unknown sender";
+  const originalDate = parsed.envelope.sent_at ?? parsed.envelope.received_at ?? "unknown time";
+  if (!originalBody) {
+    return inputBody;
+  }
+  return `${inputBody}\n\nOn ${originalDate}, ${originalFrom} wrote:\n${quoteLines(originalBody)}`;
+}
+
+function buildForwardBody(inputBody: string, stored: StoredMessageRecord): string {
+  const parsed = parseStoredMessage(stored);
+  const originalBody = parsed.body.text.trim();
+  const lines = [
+    inputBody,
+    "",
+    "---------- Forwarded message ---------",
+    `From: ${parsed.envelope.from?.email ?? parsed.envelope.from?.name ?? ""}`,
+    `Date: ${parsed.envelope.sent_at ?? parsed.envelope.received_at ?? ""}`,
+    `Subject: ${parsed.envelope.subject ?? ""}`,
+    `To: ${parsed.envelope.to.map((mailbox) => mailbox.email).join(", ")}`,
+  ];
+  if (parsed.envelope.cc.length > 0) {
+    lines.push(`Cc: ${parsed.envelope.cc.map((mailbox) => mailbox.email).join(", ")}`);
+  }
+  lines.push("", originalBody);
+  return lines.join("\n").trim();
+}
+
+async function fillComposeBody(page: Page, body: string): Promise<void> {
+  const editor = page.locator(COMPOSE_EDITOR);
+  await editor.waitFor({ timeout: 15_000 });
+  // Select this editor's contents, not the document or a read-only message body.
+  // One HTML insertion avoids keyboard Enter/list heuristics and replaces old content.
+  await editor.evaluate((element, html) => {
+    const editable = element as HTMLElement;
+    editable.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editable);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    if (!document.execCommand("insertHTML", false, html || "<br>")) {
+      throw new Error("Outlook editor rejected HTML insertion");
+    }
+    editable.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste" }));
+  }, composeBodyHtml(body));
+  await verifyComposeBody(page, normalizeComposeBody(body));
 }
 
 async function firstVisibleLocator(candidates: Locator[]): Promise<Locator | null> {
@@ -2180,6 +2244,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await session.page.locator('input[aria-label="Subject"]').fill(normalizedInput.subject);
       await fillComposeBody(session.page, normalizedInput.body);
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
+      await verifyComposeBody(session.page, normalizedInput.body);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await closeOutlookSession(session);
@@ -2209,7 +2274,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
       attachments: input.attachments ?? [],
-      body: input.body,
+      body: buildReplyBody(input.body, target.stored),
       draft: input.draft,
     };
 
@@ -2235,6 +2300,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
+      await verifyComposeBody(session.page, normalizedInput.body);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await closeOutlookSession(session);
@@ -2266,7 +2332,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
       attachments: input.attachments ?? [],
-      body: input.body,
+      body: buildReplyBody(input.body, target.stored),
       draft: input.draft,
     };
 
@@ -2292,6 +2358,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
       await attachComposeFiles(session.page, normalizedInput.attachments, account);
+      await verifyComposeBody(session.page, normalizedInput.body);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await closeOutlookSession(session);
@@ -2323,7 +2390,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       to: normalizeEmailList(input.to),
       cc: normalizeEmailList(input.cc),
       bcc: normalizeEmailList(input.bcc),
-      body: input.body,
+      body: buildForwardBody(input.body, target.stored),
       draft: input.draft,
     };
 
@@ -2359,6 +2426,7 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
       await fillRecipientField(session.page, "Bcc", normalizedInput.bcc);
       await fillComposeBody(session.page, normalizedInput.body);
       forwardedSubject = await session.page.locator('input[aria-label="Subject"]').inputValue();
+      await verifyComposeBody(session.page, normalizedInput.body);
       status = await finalizeCurrentCompose(session.page, normalizedInput.draft ? "draft" : "send");
     } finally {
       await closeOutlookSession(session);
@@ -2485,5 +2553,6 @@ export class OutlookWebPlaywrightAdapter implements MailProviderAdapter {
 
 export const outlookAdapterTestHooks = {
   fillComposeBody,
+  verifyComposeBody,
   fillRecipientField,
 };

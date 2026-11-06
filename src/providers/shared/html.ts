@@ -100,7 +100,7 @@ function decodeEntities(value: string): string {
 }
 
 function walkHtml(value: string, parser: HtmlTextExtractor): void {
-  const tagPattern = /<\/?([a-zA-Z0-9]+)(?:\s[^>]*?)?>/g;
+  const tagPattern = /<\/?([a-zA-Z0-9]+)(?:\s[^>]*?)?\/?>/g;
   let cursor = 0;
   let match: RegExpExecArray | null = null;
 
@@ -114,7 +114,7 @@ function walkHtml(value: string, parser: HtmlTextExtractor): void {
       parser.onCloseTag(tagName);
     } else {
       parser.onOpenTag(tagName, parseTagAttributes(rawTag));
-      if (rawTag.endsWith("/>")) {
+      if (rawTag.endsWith("/>") && !["br", "hr", "img", "input", "meta", "link"].includes(tagName)) {
         parser.onCloseTag(tagName);
       }
     }

@@ -500,3 +500,10 @@ Before publishing, verify the package payload:
 npm pack --dry-run
 openclaw skills info surface-cli
 ```
+
+### Compose spacing
+
+Plain-text paragraphs and single line breaks are preserved across compose transports.
+Bodies are checked for exact normalized equality before sending; blank-line changes are
+not ignored. Gmail sends a verified provider draft, Outlook verifies the editable body,
+and SMTP verifies decoded delivery MIME. See [ADR 0049](docs/decisions/0049-compose-body-fidelity.md).

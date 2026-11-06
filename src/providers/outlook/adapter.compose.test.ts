@@ -241,3 +241,26 @@ declare global {
     __replaceExistingRecipient?: boolean;
   }
 }
+
+
+test("Outlook replaces only editable body and retains paragraph, line and literal list breaks", async () => {
+  await withComposeFixture(async (page) => {
+    await page.evaluate(() => {
+      const readOnly = document.createElement("div");
+      readOnly.setAttribute("role", "textbox");
+      readOnly.setAttribute("aria-label", "Message body");
+      readOnly.textContent = "Old read-only conversation";
+      document.body.prepend(readOnly);
+      document.querySelector('[contenteditable="true"][aria-label="Message body"]')!.textContent = "Stale draft/signature";
+    });
+    const body = "Hello,\n\nParagraph one.\n\nParagraph two.\nSingle break.\n\n1. Literal list\n- Literal bullet <&>\n\nBest,\nTester";
+    await outlookAdapterTestHooks.fillComposeBody(page, body);
+    await outlookAdapterTestHooks.verifyComposeBody(page, body);
+    assert.equal(await page.locator('[aria-label="Message body"]:not([contenteditable])').innerText(), "Old read-only conversation");
+    await outlookAdapterTestHooks.fillComposeBody(page, body.replace("one", "edited"));
+    await outlookAdapterTestHooks.verifyComposeBody(page, body.replace("one", "edited"));
+    await assert.rejects(outlookAdapterTestHooks.verifyComposeBody(page, body), /read-back differs/);
+    await outlookAdapterTestHooks.fillComposeBody(page, "");
+    await outlookAdapterTestHooks.verifyComposeBody(page, "");
+  });
+});

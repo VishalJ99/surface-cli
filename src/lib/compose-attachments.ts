@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, extname, join, resolve } from "node:path";
 
 import type { ComposeAttachmentInput, ComposeAttachmentMeta } from "../contracts/mail.js";
+import { normalizeComposeBody } from "./compose-body.js";
 import { SurfaceError } from "./errors.js";
 
 const MIME_TYPES_BY_EXTENSION: Record<string, string> = {
@@ -138,7 +139,7 @@ export function buildRawMimeMessage(input: {
     ...(input.references ? [`References: ${sanitizeHeaderValue(input.references)}`] : []),
     "MIME-Version: 1.0",
   ];
-  const body = input.body.replace(/\r\n/g, "\n");
+  const body = normalizeComposeBody(input.body).replace(/\n/g, "\r\n");
 
   if (attachments.length === 0) {
     return [

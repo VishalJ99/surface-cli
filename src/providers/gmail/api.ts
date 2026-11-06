@@ -319,18 +319,21 @@ export async function modifyGmailThread(
   );
 }
 
-export async function sendGmailRawMessage(
-  account: MailAccount,
-  context: ProviderContext,
-  payload: { raw: string; threadId?: string | null },
+export async function sendGmailDraft(
+  account: MailAccount, context: ProviderContext, id: string,
 ): Promise<GmailMessageReference> {
-  return gmailApiJson<GmailMessageReference>(account, context, "/messages/send", {
-    method: "POST",
-    body: {
-      raw: payload.raw,
-      ...(payload.threadId ? { threadId: payload.threadId } : {}),
-    },
+  return gmailApiJson<GmailMessageReference>(account, context, "/drafts/send", {
+    method: "POST", body: { id },
   });
+}
+
+export async function getGmailDraftRaw(
+  account: MailAccount, context: ProviderContext, id: string,
+): Promise<string> {
+  const draft = await gmailApiJson<{ message?: { raw?: string } }>(account, context,
+    `/drafts/${encodeURIComponent(id)}`, { searchParams: { format: "raw" } });
+  if (!draft.message?.raw) throw new SurfaceError("transport_error", "Gmail draft read-back did not return raw MIME");
+  return draft.message.raw;
 }
 
 export async function createGmailDraft(

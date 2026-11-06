@@ -998,6 +998,13 @@ Recommended example:
 
 ### `surface mail send --account <account> --to <email> --subject <subject> --body <body> [--attach <path>]...`
 
+Body text uses LF internally and CRLF on MIME transports. Line-end spaces and boundary
+newlines are normalized; interior blank lines and literal list prefixes are preserved.
+A body verification mismatch fails with `transport_error` before send. Gmail stages and
+reads back a provider draft before sending it; an interrupted verification can leave an
+unsent draft. Outlook replaces only the editable compose body and verifies the complete
+text, including reconstructed reply/forward quotations. See ADR 0049.
+
 Recommended example:
 
 ```json

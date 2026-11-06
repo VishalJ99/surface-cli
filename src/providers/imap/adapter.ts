@@ -19,6 +19,7 @@ import {
 } from "mailparser";
 import { createTransport, type SendMailOptions } from "nodemailer";
 
+import { assertComposeBody } from "../../lib/compose-body.js";
 import type { MailAccount } from "../../contracts/account.js";
 import type {
   ArchiveResultEnvelope,
@@ -1443,6 +1444,10 @@ async function sendOrDraftImapSmtpMessage(input: {
     attachments: input.attachments,
   });
 
+  // Decode the exact SMTP and stored MIME, including multipart transfer encoding.
+  assertComposeBody((await simpleParser(raw.deliveryRaw)).text ?? "", input.body);
+  assertComposeBody((await simpleParser(raw.storedRaw)).text ?? "", input.body);
+
   if (input.draft) {
     const refs = await appendMimeToMailbox(
       input.account,
@@ -1457,6 +1462,9 @@ async function sendOrDraftImapSmtpMessage(input: {
         account: input.account.name,
       });
     }
+    const stored = refs.message_ref ? input.context.db.getStoredMessage(refs.message_ref) : null;
+    if (!stored) throw new SurfaceError("transport_error", "IMAP draft read-back missing.");
+    assertComposeBody(parseStoredMessage(stored).body.text, input.body);
     return { status: "drafted", refs };
   }
 

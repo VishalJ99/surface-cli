@@ -193,6 +193,11 @@ uncertain identity is preserved. See ADR 0048.
 
 ## Write Action Rules
 
+Compose must preserve interior line breaks and paragraph spacing and compare normalized
+body equality before sending, never ignore blank-line differences. Outlook checks the
+editable body, Gmail checks the provider draft MIME, and SMTP checks decoded delivery
+MIME (IMAP drafts also check the fetched copy). See ADR 0049.
+
 - write actions must stay behind explicit local enablement and recipient/account allowlists
 - browser-backed compose transports must select a recipient suggestion that contains the exact
   requested email address, preserve existing recipient chips, and verify that exactly one matching
